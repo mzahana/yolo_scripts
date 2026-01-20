@@ -107,6 +107,22 @@ const AnnotationTool = ({ datasetPath, onPathChange, samModelPath, setSamModelPa
         loadData();
     }, [currentIndex, images, datasetPath]);
 
+    // Keyboard Navigation
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            // Don't navigate if user is typing in an input/select
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+
+            if (e.key === 'ArrowRight') {
+                setCurrentIndex(prev => Math.min(images.length - 1, prev + 1));
+            } else if (e.key === 'ArrowLeft') {
+                setCurrentIndex(prev => Math.max(0, prev - 1));
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [images.length]);
+
     const fitImage = (img) => {
         if (!containerRef.current || !img) return;
         const container = containerRef.current;
