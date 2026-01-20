@@ -720,6 +720,14 @@ function App() {
         }
     };
 
+    const handleRefreshGallery = () => {
+        if (maskedPath) {
+            setCacheBuster(Date.now());
+            handleLoadMaskedImages(maskedPath);
+            showNotification('Refreshed gallery metadata');
+        }
+    };
+
     const toggleClass = (cls) => {
         if (selectedClasses.includes(cls)) {
             setSelectedClasses(selectedClasses.filter(c => c !== cls));
@@ -792,8 +800,41 @@ function App() {
                                 </button>
                             )}
                         </div>
-                        <div style={{ fontSize: '0.8rem', opacity: 0.6 }}>
-                            Showing {maskedImages.length} of {totalMasked} images
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                            <div style={{ fontSize: '0.8rem', opacity: 0.6 }}>
+                                Showing {maskedImages.length} of {totalMasked} images
+                            </div>
+                            <button
+                                className="btn btn-secondary"
+                                style={{
+                                    padding: '4px 12px',
+                                    fontSize: '0.75rem',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '6px',
+                                    borderColor: 'rgba(255,255,255,0.2)'
+                                }}
+                                onClick={handleGenerateMasks}
+                                disabled={isTaskRunning}
+                                title="Force re-generation of all masked images from current labels"
+                            >
+                                🔄 Re-generate Masks
+                            </button>
+                            <button
+                                className="btn btn-secondary"
+                                style={{
+                                    padding: '4px 12px',
+                                    fontSize: '0.75rem',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '6px',
+                                    borderColor: 'rgba(255,255,255,0.2)'
+                                }}
+                                onClick={handleRefreshGallery}
+                                title="Refresh gallery to show latest images and labels"
+                            >
+                                🔄 Refresh
+                            </button>
                         </div>
                     </div>
 
@@ -1224,6 +1265,7 @@ function App() {
                                 onBrowse={openFileBrowser}
                                 jumpToImageName={jumpToImageName}
                                 onJumpComplete={() => setJumpToImageName(null)}
+                                onSave={() => setCacheBuster(Date.now())}
                             />
                         </section>
                     )}

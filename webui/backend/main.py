@@ -956,6 +956,56 @@ def generate_masked_images_endpoint(request: GenerateMaskRequest, background_tas
     background_tasks.add_task(run_mask_generation_task, request)
     return {"status": "started"}
 
+def draw_single_mask(img_p: Path, lbl_p: Path, out_path: Path, class_names: dict):
+    """Draws masks on a single image and saves it to out_path."""
+    img = cv2.imread(str(img_p))
+    if img is None:
+        return False
+        
+    h, w = img.shape[:2]
+    
+    if not lbl_p.exists():
+        return False
+
+    with open(lbl_p, 'r') as f:
+        for line in f:
+            parts = line.strip().split()
+            if not parts: continue
+            
+            cls_id = int(parts[0])
+            coords = [float(x) for x in parts[1:]]
+            
+            color = (0, 255, 0) # Green default
+            # Simple color scheme
+            colors = [(0,255,0), (0,0,255), (255,0,0), (0,255,255), (255,255,0), (255,0,255)]
+            color = colors[cls_id % len(colors)]
+            
+            if len(coords) == 4:
+                # Bounding Box (center_x, center_y, width, height)
+                cx, cy, dw, dh = coords
+                x1 = int((cx - dw/2) * w)
+                y1 = int((cy - dh/2) * h)
+                x2 = int((cx + dw/2) * w)
+                y2 = int((cy + dh/2) * h)
+                cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+                
+                label = class_names.get(cls_id, f"class_{cls_id}")
+                cv2.putText(img, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            elif len(coords) >= 6:
+                # Polygon (x1, y1, x2, y2, ...)
+                pts = []
+                for j in range(0, len(coords), 2):
+                    pts.append([int(coords[j] * w), int(coords[j+1] * h)])
+                pts = np.array(pts, np.int32)
+                cv2.polylines(img, [pts], True, color, 2)
+                
+                label = class_names.get(cls_id, f"class_{cls_id}")
+                cv2.putText(img, label, (pts[0][0], pts[0][1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+    os.makedirs(out_path, exist_ok=True)
+    cv2.imwrite(str(out_path / (img_p.stem + ".jpg")), img)
+    return True
+
 def run_mask_generation_task(request: GenerateMaskRequest):
     try:
         app.state.task_progress["status"] = "generating_masks"
@@ -1023,54 +1073,9 @@ def run_mask_generation_task(request: GenerateMaskRequest):
         saved_count = 0
         for i, img_p in enumerate(image_files):
             lbl_p = labels_path / f"{img_p.stem}.txt"
-            if not lbl_p.exists():
-                app.state.task_progress["current"] = i + 1
-                continue
             
-            img = cv2.imread(str(img_p))
-            if img is None:
-                app.state.task_progress["current"] = i + 1
-                continue
-                
-            h, w = img.shape[:2]
-            
-            with open(lbl_p, 'r') as f:
-                for line in f:
-                    parts = line.strip().split()
-                    if not parts: continue
-                    
-                    cls_id = int(parts[0])
-                    coords = [float(x) for x in parts[1:]]
-                    
-                    color = (0, 255, 0) # Green default
-                    # Simple color scheme
-                    colors = [(0,255,0), (0,0,255), (255,0,0), (0,255,255), (255,255,0), (255,0,255)]
-                    color = colors[cls_id % len(colors)]
-                    
-                    if len(coords) == 4:
-                        # Bounding Box (center_x, center_y, width, height)
-                        cx, cy, dw, dh = coords
-                        x1 = int((cx - dw/2) * w)
-                        y1 = int((cy - dh/2) * h)
-                        x2 = int((cx + dw/2) * w)
-                        y2 = int((cy + dh/2) * h)
-                        cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
-                        
-                        label = class_names.get(cls_id, f"class_{cls_id}")
-                        cv2.putText(img, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                    elif len(coords) >= 6:
-                        # Polygon (x1, y1, x2, y2, ...)
-                        pts = []
-                        for j in range(0, len(coords), 2):
-                            pts.append([int(coords[j] * w), int(coords[j+1] * h)])
-                        pts = np.array(pts, np.int32)
-                        cv2.polylines(img, [pts], True, color, 2)
-                        
-                        label = class_names.get(cls_id, f"class_{cls_id}")
-                        cv2.putText(img, label, (pts[0][0], pts[0][1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
-            cv2.imwrite(str(out_path / (img_p.stem + ".jpg")), img)
-            saved_count += 1
+            if draw_single_mask(img_p, lbl_p, out_path, class_names):
+                saved_count += 1
             
             app.state.task_progress["current"] = i + 1
             if (i+1) % 10 == 0:
@@ -1736,6 +1741,32 @@ def save_annotation_data(request: SaveAnnotationRequest):
         label_path.parent.mkdir(parents=True, exist_ok=True)
         with open(label_path, 'w') as f:
             f.writelines(lines)
+            
+        # PROACTIVE: Update masked image if possible
+        try:
+            root, identity = get_config_identity(p)
+            masked_dir = root / f"{identity}_masked_images"
+            if masked_dir.exists():
+                # Find original image
+                img_path = find_image_file(p, request.image_name)
+                if img_path:
+                    # Load classes
+                    class_names = {}
+                    yaml_path = discover_data_yaml(p)
+                    if yaml_path and yaml_path.exists():
+                        with open(yaml_path, 'r') as yf:
+                            ydata = yaml.safe_load(yf)
+                            names = ydata.get('names', [])
+                            if isinstance(names, list):
+                                class_names = {i: n for i, n in enumerate(names)}
+                            elif isinstance(names, dict):
+                                class_names = {int(k): v for k, v in names.items()}
+                    
+                    draw_single_mask(img_path, label_path, masked_dir, class_names)
+                    print(f"DEBUG: Automatically updated mask for {request.image_name} in {masked_dir}")
+        except Exception as e:
+            print(f"Warning: Failed to auto-update mask: {e}")
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to write labels: {e}")
         

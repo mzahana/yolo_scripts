@@ -4,7 +4,7 @@ import axios from 'axios';
 const API_BASE = 'http://localhost:8000/api';
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
 
-const AnnotationTool = ({ datasetPath, onPathChange, samModelPath, setSamModelPath, onBrowse, jumpToImageName, onJumpComplete }) => {
+const AnnotationTool = ({ datasetPath, onPathChange, samModelPath, setSamModelPath, onBrowse, jumpToImageName, onJumpComplete, onSave }) => {
     const [images, setImages] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [loading, setLoading] = useState(false);
@@ -386,6 +386,7 @@ const AnnotationTool = ({ datasetPath, onPathChange, samModelPath, setSamModelPa
                 image_name: images[currentIndex].name,
                 annotations: annotations
             });
+            if (onSave) onSave(images[currentIndex].name);
             alert('Saved!');
         } catch (err) {
             alert('Error saving labels');
