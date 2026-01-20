@@ -7,11 +7,14 @@ import {
     PieChart, Pie, Cell, LabelList
 } from 'recharts';
 
+import AnnotationTool from './components/AnnotationTool';
+
 const API_BASE = 'http://localhost:8000/api';
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
 
 function App() {
     const [datasetPath, setDatasetPath] = useState('');
+    const [annotationPath, setAnnotationPath] = useState('');
     const [datasetInfo, setDatasetInfo] = useState(null);
     const [sampleImage, setSampleImage] = useState(null);
 
@@ -53,6 +56,7 @@ function App() {
     const [activeTab, setActiveTab] = useState('dataset');
     const [navItems, setNavItems] = useState([
         { id: 'dataset', label: 'Dataset Info', icon: '📂' },
+        { id: 'annotation', label: 'Manual Annotation', icon: '✏️' },
         { id: 'preprocess', label: 'Pre-processing', icon: '✂️' },
         { id: 'labeling', label: 'Auto-Labeling', icon: '🤖' },
         { id: 'processing', label: 'Data Processing', icon: '⚙️' },
@@ -382,12 +386,15 @@ function App() {
     const handleConfirmFolder = () => {
         if (browserType === 'dir') {
             if (browserTarget === 'dataset') setDatasetPath(browserPath);
+            else if (browserTarget === 'annotation_dataset') setAnnotationPath(browserPath);
             else if (browserTarget === 'merge_source' && browserIndex >= 0) {
                 const newSources = [...mergeSources];
                 newSources[browserIndex] = browserPath;
                 setMergeSources(newSources);
             }
             else if (browserTarget === 'merge_output') setMergeOutput(browserPath);
+            else if (browserTarget === 'extract_source') setExtractSource(browserPath);
+            else if (browserTarget === 'extract_output') setExtractOutput(browserPath);
             else if (browserTarget === 'extract_source') setExtractSource(browserPath);
             else if (browserTarget === 'extract_output') setExtractOutput(browserPath);
             else if (browserTarget === 'split_input') setSplitInput(browserPath);
@@ -874,14 +881,7 @@ function App() {
 
     const scaledDisplay = calculateScaledCrop(completedCrop);
 
-    const navLinks = [
-        { id: 'dataset', label: 'Dataset Info', icon: '📂' },
-        { id: 'preprocess', label: 'Pre-processing', icon: '✂️' },
-        { id: 'labeling', label: 'Auto-Labeling', icon: '🤖' },
-        { id: 'processing', label: 'Data Processing', icon: '⚙️' },
-        { id: 'verification', label: 'Verification', icon: '✅' },
-        { id: 'stats', label: 'Statistics', icon: '📊' },
-    ];
+
 
     const LightboxModal = () => {
         if (!selectedLightboxImage) return null;
@@ -1053,7 +1053,7 @@ function App() {
                 </div>
 
                 <nav className="nav-links">
-                    {navLinks.map(item => (
+                    {navItems.map(item => (
                         <div
                             key={item.id}
                             className={`nav-item ${activeTab === item.id ? 'active' : ''}`}
@@ -1172,6 +1172,17 @@ function App() {
                                     </div>
                                 </div>
                             )}
+
+                        </section>
+                    )}
+
+                    {activeTab === 'annotation' && (
+                        <section className="glass section-card" style={{ height: 'calc(100vh - 150px)', overflow: 'hidden', padding: '10px' }}>
+                            <AnnotationTool
+                                datasetPath={annotationPath}
+                                onPathChange={setAnnotationPath}
+                                onBrowse={() => openFileBrowser('annotation_dataset', 'dir')}
+                            />
                         </section>
                     )}
 

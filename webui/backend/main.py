@@ -1108,51 +1108,47 @@ def mount_path(name: str, path: str):
         return {"status": "mounted", "url": f"/static/{name}"}
     return {"status": "error", "message": f"Path does not exist: {path}"}
 
+
+def discover_labels_dir(p: Path) -> Optional[Path]:
+    """Robustly find the labels directory for a given dataset path."""
+    root, identity = get_config_identity(p)
+    
+    candidates = [
+        p / "labels", # Current path's labels subfolder
+        root / f"{identity}_labeled" / "labels",
+        root / "labeled" / "labels",
+        root / "labels" # Root's labels
+    ]
+    
+    # Check candidates
+    for lp in candidates:
+        if lp.exists() and lp.is_dir():
+            return lp
+            
+    # Search for any directory ending with _labeled/labels
+    if root.exists():
+        for item in root.iterdir():
+            if item.is_dir() and item.name.startswith(identity) and item.name.endswith("_labeled"):
+                if (item / "labels").exists():
+                    return item / "labels"
+                    
+    # Final fallback if nothing found but root/labels is a standard guess
+    return None
+
 @app.get("/api/labeled/images")
 def list_labeled_images(path: str, limit: int = 20, offset: int = 0, classes: str = None):
     p = Path(path).absolute()
     if not p.exists() or not p.is_dir():
-        # Return empty instead of 400 to allow UI to show "empty" state or generate prompt
         return {"images": [], "total": 0, "offset": offset, "limit": limit}
     
-    print(f"Listing labeled images in: {p}")
+    # Define root early so it's available for fallback and yaml lookups
+    root, _ = get_config_identity(p)
     
-    # Use unified identity logic
-    root, identity = get_config_identity(p)
-    
-    print(f"Base identity resolved for discovery: {identity}")
-
-    labels_candidates = [
-        p / "labels", # Current path's labels
-        root / f"{identity}_labeled" / "labels",
-        root / "labeled" / "labels",
-        root / "labels" # If root itself is the labels parent
-    ]
-    
-    # Also support folders that ARE the labels folder or contain them directly
-    # e.g. if p is .../labeled, look for p/labels
-    
-    labels_dir = None
-    for lp in labels_candidates:
-        print(f"Checking for labels in: {lp}")
-        if lp.exists() and lp.is_dir():
-            labels_dir = lp
-            break
-            
+    labels_dir = discover_labels_dir(p)
     if not labels_dir:
-        # One last attempt: search for any directory starting with identity and ending with _labeled/labels
-        if root.exists():
-            for item in root.iterdir():
-                if item.is_dir() and item.name.startswith(identity) and item.name.endswith("_labeled"):
-                    if (item / "labels").exists():
-                        labels_dir = item / "labels"
-                        break
+        labels_dir = root / "labels"
     
-    if not labels_dir:
-        print(f"Warning: No labels directory found in potential paths. Falling back to {root / 'labels'}")
-        labels_dir = root / "labels" # Fallback to root/labels
-    else:
-        print(f"Found labels in: {labels_dir}")
+    print(f"Using labels directory: {labels_dir}")
     
     # Load class names from data.yaml if available
     class_names_map = {}
@@ -1592,6 +1588,151 @@ def split_dataset(request: SplitRequest, background_tasks: BackgroundTasks):
     
     background_tasks.add_task(run_split_task, request)
     return {"status": "started"}
+
+class AnnotationItem(BaseModel):
+    class_id: int
+    points: List[float] # YOLO normalized coordinates
+    type: str # 'box' or 'polygon'
+
+class SaveAnnotationRequest(BaseModel):
+    dataset_path: str
+    image_name: str
+    annotations: List[AnnotationItem]
+
+def find_image_file(dataset_root: Path, image_name: str) -> Optional[Path]:
+    """Robustly find an image file within a dataset structure."""
+    # 1. Check direct subfolders
+    candidates = [
+        dataset_root / image_name,
+        dataset_root / "images" / image_name,
+        dataset_root / "masked_images" / image_name,
+        dataset_root / "train" / "images" / image_name,
+        dataset_root / "val" / "images" / image_name,
+        dataset_root / "test" / "images" / image_name
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+            
+    # 2. Search recursively if not in obvious places (max depth 3)
+    # Only do this if image_name doesn't already look like a subpath
+    if "/" not in image_name and "\\" not in image_name:
+        for ext in ["", ".jpg", ".png", ".jpeg", ".WEBP", ".JPG"]:
+            name_to_find = image_name if not ext else f"{Path(image_name).stem}{ext}"
+            # Check if we can find it by walking (limit walk)
+            for root, dirs, files in os.walk(str(dataset_root)):
+                if name_to_find in files:
+                    return Path(root) / name_to_find
+                if root.count(os.sep) - str(dataset_root).count(os.sep) > 3:
+                     dirs[:] = [] # stop recursion
+    
+    return None
+
+def get_label_path(dataset_root: Path, image_name: str) -> Path:
+    """Consistently find or determine the label path for an image."""
+    img_path = find_image_file(dataset_root, image_name)
+    
+    if img_path:
+        # Standard YOLO structure replacement: /images/ -> /labels/
+        parent = img_path.parent
+        if parent.name == "images":
+            return parent.parent / "labels" / f"{img_path.stem}.txt"
+        elif parent.name == "masked_images":
+            # If viewing masked images, try to find original labels folder
+            found = discover_labels_dir(dataset_root)
+            if found: return found / f"{img_path.stem}.txt"
+            return parent.parent / "labels" / f"{img_path.stem}.txt"
+            
+        # Check sibling labels folder
+        if (parent / "labels").exists():
+            return parent / "labels" / f"{img_path.stem}.txt"
+        elif (parent.parent / "labels").exists():
+             return parent.parent / "labels" / f"{img_path.stem}.txt"
+             
+        # Flat structure
+        return parent / f"{img_path.stem}.txt"
+
+    # Fallback to older logic if image not found (guess based on dataset_root)
+    labels_dir = discover_labels_dir(dataset_root)
+    if labels_dir:
+        return labels_dir / f"{Path(image_name).stem}.txt"
+        
+    return dataset_root / f"{Path(image_name).stem}.txt"
+
+@app.get("/api/annotation/data")
+def get_annotation_data(path: str, image_name: str):
+    """
+    Get existing annotations for a specific image.
+    Path is the DATASET path. We need to find the specific image and its label file.
+    """
+    p = Path(path).absolute()
+    label_path = get_label_path(p, image_name)
+    
+    annotations = []
+    if label_path.exists():
+        try:
+            with open(label_path, 'r') as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if not parts: continue
+                    cls_id = int(parts[0])
+                    coords = [float(x) for x in parts[1:]]
+                    
+                    # Heuristic detection
+                    atype = 'polygon'
+                    if len(coords) > 4: # Changed from == 4 to > 4 for polygon detection
+                        atype = 'polygon'
+                    else: # Assuming 4 coords means box
+                        atype = 'box'
+                        
+                    annotations.append({
+                        "class_id": cls_id,
+                        "points": coords,
+                        "type": atype
+                    })
+        except Exception as e:
+            print(f"Error reading label file {label_path}: {e}")
+            
+    return {"annotations": annotations}
+
+@app.get("/api/annotation/image_file")
+def serve_annotation_image_file(path: str, image_name: str):
+    p = Path(path).absolute()
+    img_path = find_image_file(p, image_name)
+    
+    if not img_path:
+        print(f"DEBUG: Image NOT FOUND: {image_name} in {path}")
+        raise HTTPException(status_code=404, detail=f"Image {image_name} not found in {path}")
+        
+    print(f"DEBUG: Serving annotation image: {img_path}")
+    from fastapi.responses import FileResponse
+    return FileResponse(str(img_path))
+
+@app.post("/api/annotation/save")
+def save_annotation_data(request: SaveAnnotationRequest):
+    p = Path(request.dataset_path).absolute()
+    label_path = get_label_path(p, request.image_name)
+    
+    lines = []
+    for ann in request.annotations:
+        # Validation
+        if not ann.points: continue
+        
+        # Format string
+        coords_str = " ".join([f"{x:.6f}" for x in ann.points])
+        lines.append(f"{ann.class_id} {coords_str}\n")
+        
+    try:
+        # Ensure parent exists
+        label_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(label_path, 'w') as f:
+            f.writelines(lines)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write labels: {e}")
+        
+    return {"status": "ok", "message": "Saved"}
+
+
 
 if __name__ == "__main__":
     import uvicorn
