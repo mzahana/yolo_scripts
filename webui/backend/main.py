@@ -1773,8 +1773,8 @@ def sam_predict(request: SAMPredictRequest):
         # SAM 3 predict: Source can be path or ndarray
         results = app.state.sam_model.predict(
             source=img_path, 
-            points=abs_points, 
-            labels=request.labels,
+            points=[abs_points], 
+            labels=[request.labels],
             verbose=False
         )
         

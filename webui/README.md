@@ -72,7 +72,7 @@ Access the UI at: `http://localhost:3000`
 ### 1. Project Setup
 1. Open the **Dataset Info** tab.
 2. Enter the full local path to your directory of raw images.
-3. Click **Load Dataset**. The app will report the image count and automatically look for any previous progress.
+3. Click **Scan Directory**. The app will report the image count and automatically look for any previous progress.
 
 ### 2. Image Preparation (Pre-processing)
 1. Navigate to the **Pre-processing** tab.
