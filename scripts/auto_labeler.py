@@ -57,23 +57,24 @@ class YOLOInference:
 
         # Define parent directory and output directories for images and labels
         self.parent_dir_ = self.image_dir_.parent
+        dataset_name = self.image_dir_.name
         
         if self.single_folder_:
             # Single folder structure
-            self.labeled_images_dir_ = self.parent_dir_ / "labeled/images"
-            self.labeled_labels_dir_ = self.parent_dir_ / "labeled/labels"
-            self.masked_images_dir_ = self.parent_dir_ / "masked_images"
+            self.labeled_images_dir_ = self.parent_dir_ / f"{dataset_name}_labeled/images"
+            self.labeled_labels_dir_ = self.parent_dir_ / f"{dataset_name}_labeled/labels"
+            self.masked_images_dir_ = self.parent_dir_ / f"{dataset_name}_masked_images"
             
             # Ensure output directories exist
             for dir in [self.labeled_images_dir_, self.labeled_labels_dir_, self.masked_images_dir_]:
                 dir.mkdir(parents=True, exist_ok=True)
         else:
             # Separate folders by class
-            self.bundle_images_dir_ = self.parent_dir_ / "bundles/images"
-            self.bundle_labels_dir_ = self.parent_dir_ / "bundles/labels"
-            self.single_images_dir_ = self.parent_dir_ / "single/images"
-            self.single_labels_dir_ = self.parent_dir_ / "single/labels"
-            self.masked_images_dir_ = self.parent_dir_ / "masked_images"
+            self.bundle_images_dir_ = self.parent_dir_ / f"{dataset_name}_bundles/images"
+            self.bundle_labels_dir_ = self.parent_dir_ / f"{dataset_name}_bundles/labels"
+            self.single_images_dir_ = self.parent_dir_ / f"{dataset_name}_single/images"
+            self.single_labels_dir_ = self.parent_dir_ / f"{dataset_name}_single/labels"
+            self.masked_images_dir_ = self.parent_dir_ / f"{dataset_name}_masked_images"
             
             # Ensure all output directories exist
             for dir in [self.bundle_images_dir_, self.bundle_labels_dir_, self.single_images_dir_, self.single_labels_dir_, self.masked_images_dir_]:
@@ -188,7 +189,7 @@ class YOLOInference:
         approx = cv2.approxPolyDP(contour, epsilon, True)
         return approx
 
-    def run_inference(self):
+    def run_inference(self, callback=None):
         total_images = 0
         bundle_count = 0
         single_count = 0
@@ -198,7 +199,9 @@ class YOLOInference:
         image_paths = list(self.image_dir_.glob('*.png')) + list(self.image_dir_.glob('*.jpg')) + list(self.image_dir_.glob('*.tif'))
         total_images = len(image_paths)
         
-        for img_file in tqdm(image_paths, desc="Processing Images"):
+        for i, img_file in enumerate(tqdm(image_paths, desc="Processing Images")):
+            if callback:
+                callback(i, total_images)
             try:
                 # Read the image
                 img = cv2.imread(str(img_file))
