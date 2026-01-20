@@ -75,6 +75,7 @@ class AutoLabelRequest(BaseModel):
 class FilterRequest(BaseModel):
     image_name: str
     source_dir: str # Path to masked or images dir
+    labeled_dir: Optional[str] = None # Path to original labeled directory
     target_name: str = "filtered"
 
 class MergeRequest(BaseModel):
@@ -1242,7 +1243,9 @@ def list_labeled_images(path: str, limit: int = 20, offset: int = 0, classes: st
         results = results[offset:offset + limit]
     else:
         total = len(files)
-        results = results[offset:offset + limit] # results here is already all files, just paginate
+        # results already contains the paged items, so no need to slice again with offset
+        # results = results[offset:offset + limit] <--- This was the BUG (double slicing)
+        pass
 
     return {
         "images": results,
@@ -1259,76 +1262,89 @@ def filter_labeled_image(request: FilterRequest):
     # Use unified identity logic
     root, identity = get_config_identity(source_p)
     
-    print(f"Base identity for filter discovery: {identity}")
-
-    potential_roots = [
-        root / f"{identity}_labeled",
-        root / "labeled",
-        source_p, # Maybe we are in the root already
-        root # The determined project root
-    ]
-    
-    labeled_root = None
-    for pr in potential_roots:
-        if (pr / "images").exists() and (pr / "labels").exists():
-            labeled_root = pr
-            break
-            
-    if not labeled_root:
-        labeled_root = root # Fallback to the determined project root
-    
-    # If the user didn't provide a specific target name, or if we want to ensure prefixing:
+    # Determine the project root (where filtered folder should go)
     target_name = request.target_name
     if target_name == "filtered":
-        # We want {identity}_filtered as a sibling to the active folders in the project root
         target_name = f"{identity}_filtered"
-        
-    target_root = root / target_name # Place filtered output in the project root
-    
-    print(f"Target root resolved to: {target_root}")
+    target_root = root / target_name
     
     target_images = target_root / "images"
     target_labels = target_root / "labels"
-    
     target_images.mkdir(parents=True, exist_ok=True)
     target_labels.mkdir(parents=True, exist_ok=True)
     
     img_name = request.image_name
-    # Priority:
-    # 1. source_p / img_name (This is EXACTLY what the user is looking at, e.g. masked)
-    # 2. labeled_root / "images" / img_name (This should be the processed image without masks)
     
-    src_img = source_p / img_name
-    # If the user says they want "pre-processed" and they are looking at "masked",
-    # maybe they want the one FROM THE SOURCE of the masked images?
-    # Usually masked images are in 'masked_images', and 'images' has the same files without boxes.
+    # Determine the source for COPYING (Original Image)
+    # If labeled_dir is provided, use that as the source of truth for images and labels.
+    # Otherwise, fallback to heuristic discovery.
     
-    processed_img = labeled_root / "images" / img_name
-    if not processed_img.exists():
-        # Maybe it's a sibling _processed folder?
-        potential_processed_dirs = list(root.glob(f"{identity}_processed/images"))
-        for ppd in potential_processed_dirs:
-            if (ppd / img_name).exists():
-                processed_img = ppd / img_name
+    src_img = None
+    src_label = None
+    
+    if request.labeled_dir:
+        l_root = Path(request.labeled_dir)
+        # Check standard YOLO structure first
+        if (l_root / "images").exists():
+             src_img = l_root / "images" / img_name
+             if not src_img.exists():
+                 # Fallback: maybe images are in root?
+                 src_img = l_root / img_name
+        else:
+            src_img = l_root / img_name
+            
+        # Try to find specific label
+        if (l_root / "labels").exists():
+            src_label = l_root / "labels" / f"{Path(img_name).stem}.txt"
+        else:
+            # Fallback check same dir
+            src_label = l_root / f"{Path(img_name).stem}.txt"
+            
+    else:
+        # Fallback to old behavior: use discovery
+        print("Warning: No labeled_dir provided. Attempting to discover...")
+        # ... (simplified discovery from previous code if needed, or primarily rely on source_dir if it looks like an image dir)
+        # If source_dir IS the masked dir, we want to find the original.
+        # But 'root' / "labeled" / "images" is a good guess.
+        
+        potential_roots = [
+            root / f"{identity}_labeled",
+            root / "labeled",
+            source_p.parent.parent if source_p.name == "masked_images" or source_p.name == "images" else source_p,
+            root
+        ]
+        
+        labeled_root = None
+        for pr in potential_roots:
+            if (pr / "images").exists() and (pr / "labels").exists():
+                labeled_root = pr
                 break
+        
+        if labeled_root:
+            src_img = labeled_root / "images" / img_name
+            src_label = labeled_root / "labels" / f"{Path(img_name).stem}.txt"
+        else:
+             # Last resort: just use the source file itself (e.g. if filtering from raw images)
+             src_img = source_p / img_name
 
-    # If the user wants "the pre-processed image" (no masks), use processed_img
-    # If they want what they see, use src_img.
-    # We will copy BOTH? Or just preference.
-    # User said: "image that is copied is the original image. I want the pre-processed image."
-    # Let's try to copy the processed one if it exists and differs from labeled_root.parent
-    
-    final_src_img = processed_img if processed_img.exists() else src_img
-    
-    if not final_src_img.exists():
-         print(f"Error: Source image not found. Checked {processed_img} and {src_img}")
-         raise HTTPException(status_code=404, detail=f"Source image {img_name} not found")
+    # Validate existence
+    if not src_img or not src_img.exists():
+        # Fallback: maybe the user IS looking at the image they want to filter (e.g. raw dataset)
+        fallback_img = source_p / img_name
+        if fallback_img.exists():
+            print(f"Original not found in labeled_dir, falling back to source: {fallback_img}")
+            src_img = fallback_img
+            # Look for label in source too
+            fallback_lbl = source_p.parent / "labels" / f"{Path(img_name).stem}.txt"
+            if fallback_lbl.exists(): src_label = fallback_lbl
+        else:
+            print(f"Error: Source image not found. Looked for {img_name}")
+            raise HTTPException(status_code=404, detail=f"Source image {img_name} not found")
 
-    print(f"Copying {final_src_img} to {target_images / img_name}")
-    shutil.copy2(final_src_img, target_images / img_name)
+    print(f"Copying {src_img} to {target_images / img_name}")
+    shutil.copy2(src_img, target_images / img_name)
     
-    src_label = labeled_root / "labels" / f"{Path(img_name).stem}.txt"
-    if src_label.exists():
+    if src_label and src_label.exists():
         print(f"Copying {src_label} to {target_labels / src_label.name}")
         shutil.copy2(src_label, target_labels / src_label.name)
         

@@ -175,8 +175,9 @@ function App() {
     };
 
     const handleLoadMore = () => {
-        if (labelResult?.masked_dir) {
-            handleLoadMaskedImages(labelResult.masked_dir, maskedOffset + MASKED_LIMIT, true);
+        const path = maskedPath || labelResult?.masked_dir;
+        if (path) {
+            handleLoadMaskedImages(path, maskedOffset + MASKED_LIMIT, true);
         }
     };
 
@@ -185,7 +186,8 @@ function App() {
         try {
             await axios.post(`${API_BASE}/labeled/filter`, {
                 image_name: imgName,
-                source_dir: maskedPath
+                source_dir: maskedPath,
+                labeled_dir: labelResult?.labeled_dir
             });
             showNotification('Image copied to filtered folder');
         } catch (err) {
