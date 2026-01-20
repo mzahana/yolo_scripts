@@ -4,7 +4,7 @@ import axios from 'axios';
 const API_BASE = 'http://localhost:8000/api';
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
 
-const AnnotationTool = ({ datasetPath, onPathChange, onBrowse }) => {
+const AnnotationTool = ({ datasetPath, onPathChange, samModelPath, setSamModelPath, onBrowse }) => {
     const [images, setImages] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [loading, setLoading] = useState(false);
@@ -15,11 +15,16 @@ const AnnotationTool = ({ datasetPath, onPathChange, onBrowse }) => {
     const [currentTool, setCurrentTool] = useState('cursor'); // cursor, box, polygon
     const [isDrawing, setIsDrawing] = useState(false);
     const [tempPoints, setTempPoints] = useState([]); // Canvas coordinates
+    const [samPoints, setSamPoints] = useState([]); // List of {x, y, label} (normalized)
+    const [samPreview, setSamPreview] = useState(null); // The returned polygon points (normalized)
+    const [samLoading, setSamLoading] = useState(false);
+    const [samEpsilon, setSamEpsilon] = useState(2.0);
 
     const canvasRef = useRef(null);
     const containerRef = useRef(null);
     const [imageObj, setImageObj] = useState(null);
     const [scale, setScale] = useState(1);
+    const [hoveredIndex, setHoveredIndex] = useState(null);
 
     // Fetch initial data
     useEffect(() => {
@@ -119,11 +124,12 @@ const AnnotationTool = ({ datasetPath, onPathChange, onBrowse }) => {
         }
 
         // Draw existing annotations
-        annotations.forEach((ann) => {
+        annotations.forEach((ann, idx) => {
+            const isHovered = hoveredIndex === idx;
             const color = COLORS[ann.class_id % COLORS.length];
             ctx.strokeStyle = color;
-            ctx.lineWidth = 2;
-            ctx.fillStyle = color + '40';
+            ctx.lineWidth = isHovered ? 4 : 2;
+            ctx.fillStyle = color + (isHovered ? '80' : '40');
 
             if (ann.type === 'box') {
                 const [cx, cy, w, h] = ann.points;
@@ -137,11 +143,11 @@ const AnnotationTool = ({ datasetPath, onPathChange, onBrowse }) => {
                 // Label tag
                 ctx.fillStyle = color;
                 const label = classes[ann.class_id] || ann.class_id;
+                ctx.font = isHovered ? 'bold 12px Inter, system-ui' : '12px Inter, system-ui';
                 const textW = ctx.measureText(label).width;
-                ctx.fillRect(x, y - 16, textW + 4, 16);
+                ctx.fillRect(x, y - 18, textW + 6, 18);
                 ctx.fillStyle = 'white';
-                ctx.font = '12px Arial';
-                ctx.fillText(label, x + 2, y - 4);
+                ctx.fillText(label, x + 3, y - 5);
             } else {
                 ctx.beginPath();
                 for (let i = 0; i < ann.points.length; i += 2) {
@@ -189,7 +195,40 @@ const AnnotationTool = ({ datasetPath, onPathChange, onBrowse }) => {
             }
             ctx.setLineDash([]);
         }
-    }, [imageObj, scale, annotations, tempPoints, currentTool, classes]);
+
+        // Draw SAM Prompts
+        samPoints.forEach(pt => {
+            const px = pt.x * canvas.width;
+            const py = pt.y * canvas.height;
+            ctx.fillStyle = pt.label === 1 ? '#10b981' : '#ef4444';
+            ctx.beginPath();
+            ctx.arc(px, py, 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+        });
+
+        // Draw SAM Preview
+        if (samPreview) {
+            ctx.strokeStyle = '#6366f1';
+            ctx.lineWidth = 3;
+            ctx.setLineDash([5, 5]);
+            ctx.beginPath();
+            for (let i = 0; i < samPreview.length; i += 2) {
+                const px = samPreview[i] * canvas.width;
+                const py = samPreview[i + 1] * canvas.height;
+                if (i === 0) ctx.moveTo(px, py);
+                else ctx.lineTo(px, py);
+            }
+            ctx.closePath();
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.fillStyle = 'rgba(99, 102, 241, 0.2)';
+            ctx.fill();
+        }
+
+    }, [imageObj, scale, annotations, tempPoints, currentTool, classes, hoveredIndex, samPoints, samPreview]);
 
     const getCanvasCoords = (e) => {
         const rect = canvasRef.current.getBoundingClientRect();
@@ -208,7 +247,48 @@ const AnnotationTool = ({ datasetPath, onPathChange, onBrowse }) => {
         } else if (currentTool === 'polygon') {
             setIsDrawing(true);
             setTempPoints(prev => [...prev, coords]);
+        } else if (currentTool === 'smart') {
+            // Left click = 1 (positive), Right click = 0 (negative)
+            if (e.button === 2) e.preventDefault();
+            const label = e.button === 2 ? 0 : 1;
+            const cw = imageObj.width * scale;
+            const ch = imageObj.height * scale;
+            const newPoint = { x: coords.x / cw, y: coords.y / ch, label };
+            const newPoints = [...samPoints, newPoint];
+            setSamPoints(newPoints);
+            fetchSAM(newPoints);
         }
+    };
+
+    const fetchSAM = async (points) => {
+        if (!samModelPath || points.length === 0) return;
+        setSamLoading(true);
+        try {
+            const res = await axios.post(`${API_BASE}/annotation/sam_predict`, {
+                model_path: samModelPath,
+                image_path: datasetPath,
+                image_name: images[currentIndex].name,
+                points: points.map(p => [p.x, p.y]),
+                labels: points.map(p => p.label),
+                epsilon: samEpsilon
+            });
+            setSamPreview(res.data.points);
+        } catch (err) {
+            console.error("SAM Error:", err);
+        } finally {
+            setSamLoading(false);
+        }
+    };
+
+    const applySAM = () => {
+        if (!samPreview) return;
+        setAnnotations(prev => [...prev, {
+            class_id: selectedClass,
+            type: 'polygon',
+            points: samPreview
+        }]);
+        setSamPoints([]);
+        setSamPreview(null);
     };
 
     const handleMouseMove = (e) => {
@@ -267,6 +347,13 @@ const AnnotationTool = ({ datasetPath, onPathChange, onBrowse }) => {
         }
     };
 
+    const handleContextMenu = (e) => {
+        e.preventDefault();
+        if (currentTool === 'polygon') {
+            finishPolygon(e);
+        }
+    };
+
     const handleDelete = (idx) => {
         setAnnotations(prev => prev.filter((_, i) => i !== idx));
     };
@@ -311,24 +398,47 @@ const AnnotationTool = ({ datasetPath, onPathChange, onBrowse }) => {
                 )}
             </div>
 
+            <div className="glass" style={{ padding: '10px 20px', display: 'flex', alignItems: 'center', gap: '15px', borderRadius: '12px' }}>
+                <span style={{ fontWeight: 'bold' }}>SAM Model:</span>
+                <input
+                    type="text"
+                    className="input"
+                    style={{ flex: 1, background: 'rgba(0,0,0,0.3)', color: 'white', border: '1px solid var(--border-color)', padding: '5px 12px', borderRadius: '6px' }}
+                    value={samModelPath}
+                    onChange={(e) => setSamModelPath(e.target.value)}
+                    placeholder="Enter SAM model path (.pt)..."
+                />
+                <button className="btn btn-primary" onClick={() => onBrowse('sam_model', 'file')}>Browse...</button>
+                <div style={{ marginLeft: '10px', paddingLeft: '20px', borderLeft: '1px solid rgba(255,255,255,0.1)' }}>
+                    <span style={{ opacity: 0.6, fontSize: '0.85rem' }}>Tool: </span>
+                    <code style={{ color: 'var(--accent)' }}>{currentTool}</code>
+                </div>
+            </div>
+
             {datasetPath ? (
                 <div style={{ display: 'flex', flex: 1, gap: '20px', overflow: 'hidden' }}>
                     {/* Toolbar */}
                     <div className="glass" style={{ width: '60px', borderRadius: '12px', padding: '10px', display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'center' }}>
-                        {['cursor', 'box', 'polygon'].map(tool => (
+                        {['cursor', 'box', 'polygon', 'smart'].map(tool => (
                             <button
                                 key={tool}
                                 className={`btn ${currentTool === tool ? 'btn-primary' : ''}`}
-                                onClick={() => setCurrentTool(tool)}
+                                onClick={() => {
+                                    setCurrentTool(tool);
+                                    if (tool !== 'smart') {
+                                        setSamPoints([]);
+                                        setSamPreview(null);
+                                    }
+                                }}
                                 title={tool}
                             >
-                                {tool === 'cursor' ? '👆' : tool === 'box' ? '⬜' : '📐'}
+                                {tool === 'cursor' ? '👆' : tool === 'box' ? '⬜' : tool === 'polygon' ? '📐' : '✨'}
                             </button>
                         ))}
                     </div>
 
                     {/* Canvas Area */}
-                    <div ref={containerRef} className="glass" style={{ flex: 1, borderRadius: '12px', overflow: 'hidden', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000' }} onContextMenu={finishPolygon}>
+                    <div ref={containerRef} className="glass" style={{ flex: 1, borderRadius: '12px', overflow: 'hidden', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000' }} onContextMenu={handleContextMenu}>
                         {loading ? (
                             <div style={{ color: 'white', opacity: 0.5 }}>Loading dataset...</div>
                         ) : imageObj ? (
@@ -376,7 +486,21 @@ const AnnotationTool = ({ datasetPath, onPathChange, onBrowse }) => {
                                 <div style={{ padding: '20px', textAlign: 'center', opacity: 0.5, fontSize: '0.8rem' }}>No annotations yet</div>
                             ) : (
                                 annotations.map((ann, i) => (
-                                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px', borderBottom: '1px solid rgba(255,255,255,0.05)', fontSize: '0.85rem', alignItems: 'center' }}>
+                                    <div
+                                        key={i}
+                                        style={{
+                                            display: 'flex',
+                                            justifyContent: 'space-between',
+                                            padding: '8px',
+                                            borderBottom: '1px solid rgba(255,255,255,0.05)',
+                                            fontSize: '0.85rem',
+                                            alignItems: 'center',
+                                            background: hoveredIndex === i ? 'rgba(255,255,255,0.1)' : 'transparent',
+                                            transition: 'background 0.2s'
+                                        }}
+                                        onMouseEnter={() => setHoveredIndex(i)}
+                                        onMouseLeave={() => setHoveredIndex(null)}
+                                    >
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                             <div style={{ width: '12px', height: '12px', borderRadius: '2px', background: COLORS[ann.class_id % COLORS.length] }}></div>
                                             <span style={{ fontWeight: 500 }}>
@@ -401,6 +525,55 @@ const AnnotationTool = ({ datasetPath, onPathChange, onBrowse }) => {
                         {currentTool === 'polygon' && tempPoints.length > 0 && (
                             <div style={{ marginBottom: '10px', padding: '10px', background: 'rgba(99, 102, 241, 0.2)', borderRadius: '6px', fontSize: '0.8rem', border: '1px solid rgba(99, 102, 241, 0.4)' }}>
                                 💡 Tip: <strong>Right-click</strong> to finish your polygon ({tempPoints.length} points so far)
+                            </div>
+                        )}
+
+                        {currentTool === 'smart' && (
+                            <div style={{ marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                <div style={{ padding: '10px', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '6px', fontSize: '0.8rem', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                                    ✨ <strong>Smart Tool</strong>: <br />
+                                    • Left-click: Add object <br />
+                                    • Right-click: Remove area
+                                </div>
+
+                                <div style={{ marginBottom: '10px' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '5px' }}>
+                                        <span>Simplification</span>
+                                        <span style={{ color: 'var(--accent)' }}>{samEpsilon.toFixed(1)}px</span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="10"
+                                        step="0.5"
+                                        value={samEpsilon}
+                                        onChange={(e) => {
+                                            const val = parseFloat(e.target.value);
+                                            setSamEpsilon(val);
+                                            // Re-trigger prediction if we have points
+                                            if (samPoints.length > 0) fetchSAM(samPoints);
+                                        }}
+                                        style={{ width: '100%' }}
+                                    />
+                                </div>
+
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <button
+                                        className="btn"
+                                        style={{ flex: 1, fontSize: '0.8rem' }}
+                                        onClick={() => { setSamPoints([]); setSamPreview(null); }}
+                                    >
+                                        🧹 Clear
+                                    </button>
+                                    <button
+                                        className="btn btn-primary"
+                                        style={{ flex: 1, fontSize: '0.8rem' }}
+                                        onClick={applySAM}
+                                        disabled={!samPreview || samLoading}
+                                    >
+                                        {samLoading ? '...' : '✅ Apply'}
+                                    </button>
+                                </div>
                             </div>
                         )}
 

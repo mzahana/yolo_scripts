@@ -15,6 +15,7 @@ const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'
 function App() {
     const [datasetPath, setDatasetPath] = useState('');
     const [annotationPath, setAnnotationPath] = useState('');
+    const [samModelPath, setSamModelPath] = useState('');
     const [datasetInfo, setDatasetInfo] = useState(null);
     const [sampleImage, setSampleImage] = useState(null);
 
@@ -355,6 +356,8 @@ function App() {
         else if (target === 'merge_output') initialPath = mergeOutput || '/';
         else if (target === 'extract_source') initialPath = extractSource || '/';
         else if (target === 'extract_output') initialPath = extractOutput || '/';
+        else if (target === 'annotation_dataset') initialPath = annotationPath || '/';
+        else if (target === 'sam_model') initialPath = samModelPath ? samModelPath.substring(0, samModelPath.lastIndexOf('/')) : '/';
 
         fetchFS(initialPath);
         setShowFileBrowser(true);
@@ -379,6 +382,7 @@ function App() {
             fetchFS(item.path);
         } else if (browserType === 'file') {
             if (browserTarget === 'model') setModelPath(item.path);
+            else if (browserTarget === 'sam_model') setSamModelPath(item.path);
             setShowFileBrowser(false);
         }
     };
@@ -411,6 +415,7 @@ function App() {
                         <h3 style={{ margin: 0 }}>
                             {browserTarget === 'dataset' && 'Select Dataset Folder'}
                             {browserTarget === 'model' && 'Select YOLO Model File'}
+                            {browserTarget === 'sam_model' && 'Select SAM Model File (.pt)'}
                             {browserTarget === 'merge_source' && 'Select Source Dataset'}
                             {browserTarget === 'merge_output' && 'Select Output Directory'}
                             {browserTarget === 'extract_source' && 'Select Labeled Dataset'}
@@ -1181,7 +1186,9 @@ function App() {
                             <AnnotationTool
                                 datasetPath={annotationPath}
                                 onPathChange={setAnnotationPath}
-                                onBrowse={() => openFileBrowser('annotation_dataset', 'dir')}
+                                samModelPath={samModelPath}
+                                setSamModelPath={setSamModelPath}
+                                onBrowse={openFileBrowser}
                             />
                         </section>
                     )}

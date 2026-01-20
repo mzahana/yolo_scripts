@@ -21,8 +21,9 @@ try:
     from auto_labeler import YOLOInference
     from crop_resize import process_image, get_supported_image_files
     from split_folder import split_folder
+    from ultralytics import SAM
 except ImportError as e:
-    print(f"Error importing scripts: {e}")
+    print(f"Error importing scripts/ultralytics: {e}")
 
 app = FastAPI()
 
@@ -1599,6 +1600,14 @@ class SaveAnnotationRequest(BaseModel):
     image_name: str
     annotations: List[AnnotationItem]
 
+class SAMPredictRequest(BaseModel):
+    model_path: str
+    image_path: str
+    image_name: str
+    points: List[List[float]] # Normalized [[x,y], ...]
+    labels: List[int] # [1, 0, ...]
+    epsilon: float = 1.0 # Approximation error for polygon simplification
+
 def find_image_file(dataset_root: Path, image_name: str) -> Optional[Path]:
     """Robustly find an image file within a dataset structure."""
     # 1. Check direct subfolders
@@ -1731,6 +1740,72 @@ def save_annotation_data(request: SaveAnnotationRequest):
         raise HTTPException(status_code=500, detail=f"Failed to write labels: {e}")
         
     return {"status": "ok", "message": "Saved"}
+
+@app.post("/api/annotation/sam_predict")
+def sam_predict(request: SAMPredictRequest):
+    """Run SAM3 inference for a given point/box prompt."""
+    p = Path(request.image_path).absolute()
+    img_path = find_image_file(p, request.image_name)
+    
+    if not img_path:
+        raise HTTPException(status_code=404, detail=f"Image {request.image_name} not found")
+        
+    # Model storage/caching
+    if not hasattr(app.state, 'sam_model') or app.state.sam_model_path != request.model_path:
+        print(f"Loading SAM model from {request.model_path}...")
+        try:
+            app.state.sam_model = SAM(request.model_path)
+            app.state.sam_model_path = request.model_path
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to load SAM model: {e}")
+
+    # Prepare points
+    img_cv = cv2.imread(str(img_path))
+    if img_cv is None:
+        raise HTTPException(status_code=500, detail="Failed to read image for SAM")
+    h, w = img_cv.shape[:2]
+    
+    # Scale points from normalized to absolute
+    abs_points = [[p[0] * w, p[1] * h] for p in request.points]
+    
+    try:
+        # Run inference
+        # SAM 3 predict: Source can be path or ndarray
+        results = app.state.sam_model.predict(
+            source=img_path, 
+            points=abs_points, 
+            labels=request.labels,
+            verbose=False
+        )
+        
+        if not results or len(results) == 0:
+            return {"points": []}
+            
+        # Get the mask polygons
+        masks = results[0].masks
+        if masks is not None and len(masks.xy) > 0:
+            # Take the first mask (pixel coordinates)
+            poly_pixels = masks.xy[0].astype(np.float32)
+            
+            # Simplify polygon using Douglas-Peucker
+            if request.epsilon > 0:
+                # poly_pixels is (N, 2)
+                poly_pixels = cv2.approxPolyDP(poly_pixels, request.epsilon, True)
+                # Reshape back to (N, 2)
+                poly_pixels = poly_pixels.reshape(-1, 2)
+            
+            # Normalize points
+            poly_norm = []
+            for pt in poly_pixels:
+                poly_norm.append(float(pt[0] / w))
+                poly_norm.append(float(pt[1] / h))
+                
+            return {"points": poly_norm}
+            
+        return {"points": []}
+    except Exception as e:
+        print(f"SAM Predict Error: {e}")
+        raise HTTPException(status_code=500, detail=f"SAM Inference error: {e}")
 
 
 
