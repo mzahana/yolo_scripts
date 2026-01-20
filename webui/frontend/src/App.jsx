@@ -16,6 +16,7 @@ function App() {
     const [datasetPath, setDatasetPath] = useState('');
     const [annotationPath, setAnnotationPath] = useState('');
     const [samModelPath, setSamModelPath] = useState('');
+    const [jumpToImageName, setJumpToImageName] = useState(null);
     const [datasetInfo, setDatasetInfo] = useState(null);
     const [sampleImage, setSampleImage] = useState(null);
 
@@ -151,6 +152,16 @@ function App() {
         }
         return () => clearInterval(interval);
     }, [isTaskRunning]);
+
+    // Auto-predict annotation path when dataset path changes
+    useEffect(() => {
+        if (datasetPath && datasetPath.trim() !== '') {
+            // Predict annotation path: <folder>_processed_labeled
+            const baseDir = datasetPath.replace(/\/+$/, '');
+            const predicted = baseDir + '_processed_labeled';
+            setAnnotationPath(predicted);
+        }
+    }, [datasetPath]);
 
     const handleLoadMaskedImages = async (path, offset = 0, append = false) => {
         try {
@@ -341,6 +352,15 @@ function App() {
         } catch (err) {
             showNotification('Error loading dataset: ' + (err.response?.data?.detail || err.message));
         }
+    };
+
+    const jumpToAnnotation = (imageName) => {
+        // If annotation path is not set, use main dataset path
+        if (!annotationPath && datasetPath) {
+            setAnnotationPath(datasetPath);
+        }
+        setJumpToImageName(imageName);
+        setActiveTab('annotation');
     };
 
     // File Browser Logic
@@ -751,7 +771,7 @@ function App() {
         );
     };
 
-    const VerificationGallery = () => {
+    const VerificationGallery = ({ onJumpToAnnotation }) => {
         // Use labels classes if available
         const classes = availableClasses.length > 0 ? availableClasses : (datasetStats?.class_stats?.map(s => s.name) || []);
 
@@ -860,24 +880,37 @@ function App() {
                                                 <span className="badge" style={{ fontSize: '0.65rem', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444' }}>Empty</span>
                                             )}
                                         </div>
+                                        <div style={{ display: 'flex', gap: '8px' }}>
+                                            <button
+                                                className="btn"
+                                                style={{ flex: 1, padding: '8px 5px', fontSize: '0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
+                                                onClick={() => onJumpToAnnotation(img.name)}
+                                                title="Jump to Annotation Tool"
+                                            >
+                                                ✏️ Edit
+                                            </button>
+                                            <button
+                                                className="btn"
+                                                style={{ flex: 1, padding: '8px 5px', fontSize: '0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
+                                                onClick={() => handleFilterImage(img.name)}
+                                                title="Copy to Filtered Folder"
+                                            >
+                                                📂 Filter
+                                            </button>
+                                        </div>
                                     </div>
-                                    <button
-                                        className="btn"
-                                        style={{ width: '100%', padding: '6px', fontSize: '0.8rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)' }}
-                                        onClick={() => handleFilterImage(img.name)}
-                                    >
-                                        📂 Copy to Filtered
-                                    </button>
                                 </div>
                             ))}
                         </div>
-                        {maskedImages.length < totalMasked && (
-                            <div style={{ marginTop: '40px', textAlign: 'center' }}>
-                                <button className="btn btn-primary" onClick={handleLoadMore}>
-                                    Load More ({totalMasked - maskedImages.length} remaining)
-                                </button>
-                            </div>
-                        )}
+                        {
+                            maskedImages.length < totalMasked && (
+                                <div style={{ marginTop: '40px', textAlign: 'center' }}>
+                                    <button className="btn btn-primary" onClick={handleLoadMore}>
+                                        Load More ({totalMasked - maskedImages.length} remaining)
+                                    </button>
+                                </div>
+                            )
+                        }
                     </div>
                 )}
             </div>
@@ -1189,6 +1222,8 @@ function App() {
                                 samModelPath={samModelPath}
                                 setSamModelPath={setSamModelPath}
                                 onBrowse={openFileBrowser}
+                                jumpToImageName={jumpToImageName}
+                                onJumpComplete={() => setJumpToImageName(null)}
                             />
                         </section>
                     )}
@@ -1591,7 +1626,7 @@ function App() {
                             <p style={{ color: 'var(--text-muted)', marginBottom: '30px' }}>
                                 Preview labeled results with confidence scores and bounding boxes.
                             </p>
-                            <VerificationGallery />
+                            <VerificationGallery onJumpToAnnotation={jumpToAnnotation} />
                         </section>
                     )}
 

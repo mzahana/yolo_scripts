@@ -4,7 +4,7 @@ import axios from 'axios';
 const API_BASE = 'http://localhost:8000/api';
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
 
-const AnnotationTool = ({ datasetPath, onPathChange, samModelPath, setSamModelPath, onBrowse }) => {
+const AnnotationTool = ({ datasetPath, onPathChange, samModelPath, setSamModelPath, onBrowse, jumpToImageName, onJumpComplete }) => {
     const [images, setImages] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [loading, setLoading] = useState(false);
@@ -39,8 +39,13 @@ const AnnotationTool = ({ datasetPath, onPathChange, samModelPath, setSamModelPa
 
                 // Get Images
                 const imgRes = await axios.get(`${API_BASE}/labeled/images?path=${encodeURIComponent(datasetPath)}&limit=10000`);
-                setImages(imgRes.data.images || []);
-                setCurrentIndex(0);
+                const imgList = imgRes.data.images || [];
+                setImages(imgList);
+
+                // Only reset to 0 if we are NOT jumping
+                if (!jumpToImageName) {
+                    setCurrentIndex(0);
+                }
             } catch (err) {
                 console.error("Error init annotation:", err);
             } finally {
@@ -49,6 +54,17 @@ const AnnotationTool = ({ datasetPath, onPathChange, samModelPath, setSamModelPa
         };
         loadInit();
     }, [datasetPath]);
+
+    // Separate effect for jumping, so it works even if datasetPath doesn't change
+    useEffect(() => {
+        if (jumpToImageName && images.length > 0) {
+            const idx = images.findIndex(img => img.name === jumpToImageName);
+            if (idx >= 0) {
+                setCurrentIndex(idx);
+            }
+            if (onJumpComplete) onJumpComplete();
+        }
+    }, [jumpToImageName, images, onJumpComplete]);
 
     // Load current image and existing annotations
     useEffect(() => {
