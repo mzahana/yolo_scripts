@@ -54,6 +54,7 @@ class YOLOInference:
         self.resize_height_ = resize_height
         self.resize_width_ = resize_width
         self.single_folder_ = single_folder
+        self.specific_images_ = None  # List of specific filenames to process
 
         # Define parent directory and output directories for images and labels
         self.parent_dir_ = self.image_dir_.parent
@@ -197,6 +198,11 @@ class YOLOInference:
 
         # Iterate over images in the image directory
         image_paths = list(self.image_dir_.glob('*.png')) + list(self.image_dir_.glob('*.jpg')) + list(self.image_dir_.glob('*.tif'))
+        
+        # Filter for specific images if requested
+        if self.specific_images_:
+            image_paths = [p for p in image_paths if p.name in self.specific_images_]
+            
         total_images = len(image_paths)
         
         for i, img_file in enumerate(tqdm(image_paths, desc="Processing Images")):

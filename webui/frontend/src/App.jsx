@@ -89,6 +89,15 @@ function App() {
     // Verification Filtering
     const [filterClasses, setFilterClasses] = useState([]);
 
+    // Single Auto-Label State
+    const [labelingMode, setLabelingMode] = useState('batch'); // 'batch' or 'single'
+    const [labelingImages, setLabelingImages] = useState([]);
+    const [currentSingleImageIndex, setCurrentSingleImageIndex] = useState(0);
+    const [singleLabelResult, setSingleLabelResult] = useState(null);
+    const [singleLabelLoading, setSingleLabelLoading] = useState(false);
+    const [labelingSourcePath, setLabelingSourcePath] = useState('');
+    const [imageSearchQuery, setImageSearchQuery] = useState('');
+
     const showNotification = (msg) => {
         setNotification(msg);
         setTimeout(() => setNotification(''), 3000);
@@ -725,6 +734,130 @@ function App() {
             setCacheBuster(Date.now());
             handleLoadMaskedImages(maskedPath);
             showNotification('Refreshed gallery metadata');
+        }
+    };
+
+    const navigateSingleImage = (direction) => {
+        if (labelingImages.length === 0) return;
+
+        let newIndex = currentSingleImageIndex + direction;
+        // Clamp logic
+        if (newIndex < 0) newIndex = 0;
+        if (newIndex >= labelingImages.length) newIndex = labelingImages.length - 1;
+
+        if (newIndex !== currentSingleImageIndex) {
+            setCurrentSingleImageIndex(newIndex);
+            setSingleLabelResult(null); // Reset result
+        }
+    };
+
+    const handleImageSearch = (e) => {
+        const query = e.target.value;
+        setImageSearchQuery(query);
+
+        if (!query) return;
+
+        // Find first match
+        const index = labelingImages.findIndex(img => img.name.toLowerCase().includes(query.toLowerCase()));
+        if (index !== -1) {
+            setCurrentSingleImageIndex(index);
+            setSingleLabelResult(null);
+        }
+    };
+
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if (activeTab === 'labeling' && labelingMode === 'single') {
+                // Ignore if typing in an input
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+                if (e.key === 'ArrowLeft') {
+                    navigateSingleImage(-1);
+                } else if (e.key === 'ArrowRight') {
+                    navigateSingleImage(1);
+                }
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [activeTab, labelingMode, labelingImages, currentSingleImageIndex]);
+
+    const fetchLabelingImages = async () => {
+        let path = lastProcessedDir;
+
+        // If no explicit last processed dir, try to predict it
+        if (!path && datasetPath) {
+            // Check for _processed sibling
+            const potential = datasetPath.replace(/\/+$/, '') + '_processed';
+            try {
+                // Quick check if it exists by listing it. 
+                // We use only_dirs=true to be lightweight, if it returns items (or empty list) it exists.
+                await axios.get(`${API_BASE}/fs/list?path=${encodeURIComponent(potential)}&only_dirs=true`);
+                path = potential;
+            } catch (ignore) {
+                // If it doesn't exist, fall back to datasetPath
+                path = datasetPath;
+            }
+        }
+
+        if (!path) path = datasetPath;
+        if (!path) return;
+
+        try {
+            const res = await axios.get(`${API_BASE}/fs/list?path=${encodeURIComponent(path)}&only_dirs=false`);
+            // Filter for images. Note: fs/list returns names.
+            const imgs = res.data.items.filter(i => !i.is_dir && /\.(jpg|jpeg|png|tif|tiff)$/i.test(i.name));
+            setLabelingImages(imgs);
+            setLabelingSourcePath(path);
+
+            // Mount this path so we can serve images
+            await axios.post(`${API_BASE}/mount?name=labeling_source&path=${encodeURIComponent(path)}`);
+
+            if (imgs.length > 0 && currentSingleImageIndex >= imgs.length) {
+                setCurrentSingleImageIndex(0);
+            }
+        } catch (err) {
+            console.error("Error fetching labeling images:", err);
+            showNotification('Error loading images for labeling');
+        }
+    };
+
+    // Call this when ensuring we have images
+    useEffect(() => {
+        if (activeTab === 'labeling' && labelingMode === 'single' && labelingImages.length === 0) {
+            fetchLabelingImages();
+        }
+    }, [activeTab, labelingMode, lastProcessedDir, datasetPath]);
+
+    const handleAutoLabelSingle = async () => {
+        if (!modelPath) {
+            showNotification('Please select a model first');
+            return;
+        }
+        const img = labelingImages[currentSingleImageIndex];
+        if (!img) return;
+        setSingleLabelLoading(true);
+        setSingleLabelResult(null);
+
+        try {
+            // Use the path we determined in fetchLabelingImages
+            const sourcePath = labelingSourcePath || lastProcessedDir || datasetPath;
+
+            const res = await axios.post(`${API_BASE}/autolabel/single`, {
+                dataset_path: sourcePath,
+                image_name: img.name,
+                model_path: modelPath,
+                confidence: parseFloat(confidence),
+                save_masked: true
+            });
+            setSingleLabelResult(res.data);
+            setCacheBuster(Date.now());
+            showNotification('Image labeled successfully');
+        } catch (err) {
+            showNotification('Labeling failed: ' + (err.response?.data?.detail || err.message));
+        } finally {
+            setSingleLabelLoading(false);
         }
     };
 
@@ -1600,8 +1733,40 @@ function App() {
                     )}
 
                     {activeTab === 'labeling' && (
-                        <section className="glass section-card" style={{ maxWidth: '700px' }}>
-                            <div className="section-title">Step 3: AI Auto-Labeling</div>
+                        <section className="glass section-card" style={labelingMode === 'single' ? { maxWidth: '100%', height: 'calc(100vh - 150px)', overflowY: 'auto' } : { maxWidth: '700px' }}>
+                            <div className="section-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                                <span>Step 3: AI Auto-Labeling</span>
+                                <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', padding: '4px', border: '1px solid var(--border-color)' }}>
+                                    <button
+                                        className="btn"
+                                        style={{
+                                            padding: '6px 15px',
+                                            fontSize: '0.8rem',
+                                            background: labelingMode === 'batch' ? 'var(--primary)' : 'transparent',
+                                            border: 'none',
+                                            color: 'white',
+                                            borderRadius: '5px'
+                                        }}
+                                        onClick={() => setLabelingMode('batch')}
+                                    >
+                                        Batch Process
+                                    </button>
+                                    <button
+                                        className="btn"
+                                        style={{
+                                            padding: '6px 15px',
+                                            fontSize: '0.8rem',
+                                            background: labelingMode === 'single' ? 'var(--primary)' : 'transparent',
+                                            border: 'none',
+                                            color: 'white',
+                                            borderRadius: '5px'
+                                        }}
+                                        onClick={() => setLabelingMode('single')}
+                                    >
+                                        Single Image
+                                    </button>
+                                </div>
+                            </div>
 
                             <div className="input-group">
                                 <label>YOLO Model Path (.pt)</label>
@@ -1639,22 +1804,113 @@ function App() {
                                 </div>
                             </div>
 
-                            <button className="btn btn-primary" style={{ height: '50px', fontSize: '1rem' }} onClick={handleAutoLabel} disabled={!datasetInfo || isTaskRunning}>
-                                {isTaskRunning && taskProgress?.status === 'labeling' ? 'Labeling in Progress...' : '⚡ Start Auto-Labeling'}
-                            </button>
+                            {labelingMode === 'batch' ? (
+                                <>
+                                    <button className="btn btn-primary" style={{ height: '50px', fontSize: '1rem' }} onClick={handleAutoLabel} disabled={!datasetInfo || isTaskRunning}>
+                                        {isTaskRunning && taskProgress?.status === 'labeling' ? 'Labeling in Progress...' : '⚡ Start Auto-Labeling'}
+                                    </button>
 
-                            <ProgressBar progress={taskProgress} type="labeling" />
+                                    <ProgressBar progress={taskProgress} type="labeling" />
 
-                            {labelResult && (
-                                <div className="stats-card" style={{ marginTop: '30px', borderLeft: '4px solid var(--accent)' }}>
-                                    <div style={{ color: 'var(--accent)', fontWeight: 'bold', marginBottom: '15px' }}>✓ Process Complete</div>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '0.9rem' }}>
-                                        <div><strong>Output:</strong> {labelResult.labeled_dir}</div>
-                                        <div><strong>Config:</strong> {labelResult.yaml_path}</div>
-                                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '5px' }}>
-                                            {labelResult.classes && labelResult.classes.map((c, i) => (
-                                                <span key={i} className="badge">{c}</span>
-                                            ))}
+                                    {labelResult && (
+                                        <div className="stats-card" style={{ marginTop: '30px', borderLeft: '4px solid var(--accent)' }}>
+                                            <div style={{ color: 'var(--accent)', fontWeight: 'bold', marginBottom: '15px' }}>✓ Process Complete</div>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '0.9rem' }}>
+                                                <div><strong>Output:</strong> {labelResult.labeled_dir}</div>
+                                                <div><strong>Config:</strong> {labelResult.yaml_path}</div>
+                                                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '5px' }}>
+                                                    {labelResult.classes && labelResult.classes.map((c, i) => (
+                                                        <span key={i} className="badge">{c}</span>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </>
+                            ) : (
+                                <div className="single-label-container" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', minHeight: '400px' }}>
+                                    {/* Left: Raw Image */}
+                                    <div className="glass" style={{ padding: '15px', display: 'flex', flexDirection: 'column' }}>
+                                        <div style={{ marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                <span style={{ fontWeight: 'bold' }}>Raw Image</span>
+                                                {labelingImages.length > 0 && (
+                                                    <span style={{ fontSize: '0.8rem', opacity: 0.6 }}>
+                                                        {currentSingleImageIndex + 1} / {labelingImages.length}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <div className="input-group" style={{ margin: 0 }}>
+                                                <input
+                                                    type="text"
+                                                    placeholder="Search image name..."
+                                                    value={imageSearchQuery}
+                                                    onChange={handleImageSearch}
+                                                    style={{ padding: '6px', fontSize: '0.9rem', width: '100%' }}
+                                                />
+                                            </div>
+                                        </div>
+
+                                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', overflow: 'hidden', minHeight: '300px', position: 'relative' }}>
+                                            {labelingImages.length > 0 ? (
+                                                <img
+                                                    src={`http://localhost:8000/static/labeling_source/${labelingImages[currentSingleImageIndex]?.name}?t=${cacheBuster}`}
+                                                    style={{ maxWidth: '100%', maxHeight: '400px', objectFit: 'contain' }}
+                                                />
+                                            ) : (
+                                                <div style={{ opacity: 0.5 }}>No images found</div>
+                                            )}
+                                        </div>
+
+                                        <div style={{ display: 'flex', gap: '10px', marginTop: '15px', justifyContent: 'center' }}>
+                                            <button
+                                                className="btn"
+                                                onClick={() => navigateSingleImage(-1)}
+                                                disabled={currentSingleImageIndex === 0}
+                                            >
+                                                Previous (←)
+                                            </button>
+                                            <div style={{ flex: 1, textAlign: 'center', fontSize: '0.8rem', fontFamily: 'monospace', alignSelf: 'center' }}>
+                                                {labelingImages[currentSingleImageIndex]?.name || '-'}
+                                            </div>
+                                            <button
+                                                className="btn"
+                                                onClick={() => navigateSingleImage(1)}
+                                                disabled={currentSingleImageIndex === labelingImages.length - 1}
+                                            >
+                                                Next (→)
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {/* Right: Result */}
+                                    <div className="glass" style={{ padding: '15px', display: 'flex', flexDirection: 'column' }}>
+                                        <div style={{ marginBottom: '10px', fontWeight: 'bold' }}>Labeling Result</div>
+
+                                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', overflow: 'hidden', minHeight: '300px' }}>
+                                            {singleLabelLoading ? (
+                                                <div className="spinner"></div>
+                                            ) : singleLabelResult && singleLabelResult.masked_url ? (
+                                                <img
+                                                    src={`http://localhost:8000${singleLabelResult.masked_url}?t=${cacheBuster}`}
+                                                    style={{ maxWidth: '100%', maxHeight: '400px', objectFit: 'contain' }}
+                                                />
+                                            ) : (
+                                                <div style={{ opacity: 0.3, textAlign: 'center' }}>
+                                                    <div>Result will appear here</div>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div style={{ marginTop: '15px' }}>
+                                            <button
+                                                className="btn btn-primary"
+                                                style={{ width: '100%' }}
+                                                onClick={handleAutoLabelSingle}
+                                                disabled={singleLabelLoading || !labelingImages[currentSingleImageIndex]}
+                                            >
+                                                {singleLabelLoading ? 'Processing...' : '⚡ Auto-Label This Image'}
+                                            </button>
                                         </div>
                                     </div>
                                 </div>

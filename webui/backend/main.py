@@ -73,6 +73,13 @@ class AutoLabelRequest(BaseModel):
     confidence: float = 0.5
     save_masked: bool = False
 
+class AutoLabelSingleRequest(BaseModel):
+    dataset_path: str
+    image_name: str
+    model_path: str
+    confidence: float = 0.5
+    save_masked: bool = True
+
 class FilterRequest(BaseModel):
     image_name: str
     source_dir: str # Path to masked or images dir
@@ -597,6 +604,74 @@ def autolabel_dataset(request: AutoLabelRequest, background_tasks: BackgroundTas
     background_tasks.add_task(run_autolabel_task, request)
     return {"status": "started"}
 
+@app.post("/api/autolabel/single")
+def autolabel_single_image(request: AutoLabelSingleRequest):
+    img_dir = Path(request.dataset_path)
+    if not img_dir.exists():
+        raise HTTPException(status_code=400, detail="Dataset path does not exist")
+    
+    if not request.model_path or not Path(request.model_path).exists():
+        raise HTTPException(status_code=400, detail=f"Model path does not exist: {request.model_path}")
+
+    # Verify image exists
+    target_image = img_dir / request.image_name
+    if not target_image.exists():
+        raise HTTPException(status_code=404, detail="Image not found in dataset directory")
+
+    try:
+        # Initialize inferencer for single folder structure (usually what we want for webui)
+        inferencer = YOLOInference(
+            model_path=request.model_path,
+            image_dir=str(img_dir),
+            confidence=request.confidence,
+            save_masked_images=request.save_masked,
+            single_folder=True
+        )
+        
+        # Inject the specific image to process
+        inferencer.specific_images_ = [request.image_name]
+        
+        # Run inference synchronously since it's just one image
+        inferencer.run_inference()
+        
+        # Construct result paths
+        # Note: YOLOInference naming convention depends on its logic, but usually:
+        masked_dir = img_dir.parent / f"{img_dir.name}_masked_images"
+        labeled_dir = img_dir.parent / f"{img_dir.name}_labeled"
+        
+        # Determine strict output filenames
+        masked_image_path = masked_dir / f"{Path(request.image_name).stem}.jpg"
+        
+        if not masked_image_path.exists():
+             # Fallback check if it wasn't saved where expected
+             pass
+
+        # Update project config so Verification page knows where to look
+        config_update = {
+            "model_path": request.model_path,
+            "labeled_dir": str(labeled_dir.absolute()),
+            "masked_dir": str(masked_dir.absolute())
+        }
+        save_project_config(Path(request.dataset_path), config_update)
+
+        # Mount the result directory to ensure it's accessible
+        # We use a specific mount name for single labeling results
+        app.mount("/static/single_label_result", StaticFiles(directory=str(masked_dir)), name="single_label_result")
+
+        return {
+            "status": "success",
+            "image_name": request.image_name,
+            # Force .jpg extension because auto_labeler.py saves as .jpg
+            "masked_url": f"/static/single_label_result/{Path(request.image_name).stem}.jpg", 
+            "masked_dir": str(masked_dir.absolute()),
+            "labeled_dir": str(labeled_dir.absolute())
+        }
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Labeling failed: {str(e)}")
+
 def run_merge_task(request: MergeRequest):
     try:
         app.state.task_progress["status"] = "merging"
@@ -1048,9 +1123,18 @@ def run_mask_generation_task(request: GenerateMaskRequest):
         if request.output_path:
             out_path = Path(request.output_path).absolute()
         else:
-            # We want it in project_root/prefix_masked_images
-            root = find_project_root(raw_path)
-            out_path = root / f"{raw_path.name}_masked_images"
+            # Smart determination of output directory to match auto_labeler logic
+            # We want [DatasetIdentity]_masked_images
+            
+            # If our source is inside a structure like /foo_labeled/images, we want /foo_masked_images
+            if img_src_path.name == "images" and img_src_path.parent.name.endswith("_labeled"):
+                # Strip _labeled from parent
+                base_name = img_src_path.parent.name.replace("_labeled", "")
+                out_path = img_src_path.parent.parent / f"{base_name}_masked_images"
+            else:
+                 # Flat structure or unknown
+                 # If img_src_path is "rgb_processed", we want "rgb_processed_masked_images"
+                 out_path = img_src_path.parent / f"{img_src_path.name}_masked_images"
             
         os.makedirs(out_path, exist_ok=True)
 
