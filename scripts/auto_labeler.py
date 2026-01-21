@@ -45,7 +45,7 @@ import cv2
 import numpy as np
 
 class YOLOInference:
-    def __init__(self, model_path, image_dir, confidence=0.5, save_masked_images=False, epsilon=0.01, resize_height=None, resize_width=None, single_folder=False):
+    def __init__(self, model_path, image_dir, confidence=0.5, save_masked_images=False, epsilon=0.01, resize_height=None, resize_width=None, single_folder=False, class_names_map=None):
         self.model_path_ = model_path
         self.image_dir_ = Path(image_dir)
         self.confidence_ = confidence
@@ -82,10 +82,13 @@ class YOLOInference:
                 dir.mkdir(parents=True, exist_ok=True)
         
         # Define class names mapping
-        self.class_names_ = {
-            0: "Bundle",
-            1: "Single-Item"
-        }
+        if class_names_map:
+            self.class_names_ = class_names_map
+        else:
+            self.class_names_ = {
+                0: "Bundle",
+                1: "Single-Item"
+            }
         
         # Load model with explicit task definition
         # self.model_ = YOLO(self.model_path_, task='segment' if 'segment' in self.model_path_ else 'detect')

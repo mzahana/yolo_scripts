@@ -9,6 +9,8 @@ import {
 
 import AnnotationTool from './components/AnnotationTool';
 
+import ProjectLanding from './components/ProjectLanding';
+
 const API_BASE = 'http://localhost:8000/api';
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
 
@@ -23,6 +25,7 @@ function App() {
     const [crop, setCrop] = useState({ unit: '%', width: 80, height: 80, x: 10, y: 10 });
     const [completedCrop, setCompletedCrop] = useState(null);
     const [imgRef, setImgRef] = useState(null);
+    const [scaledDisplay, setScaledDisplay] = useState(null);
 
     const [resizeWidth, setResizeWidth] = useState(640);
     const [resizeHeight, setResizeHeight] = useState(640);
@@ -44,6 +47,8 @@ function App() {
     const [maskedOffset, setMaskedOffset] = useState(0);
     const [totalMasked, setTotalMasked] = useState(0);
     const [projectConfig, setProjectConfig] = useState(null);
+    const [projectPaths, setProjectPaths] = useState(null);
+    const [landingCallback, setLandingCallback] = useState(null);
     const MASKED_LIMIT = 20;
 
     // Lightbox & Stats State
@@ -55,16 +60,23 @@ function App() {
     const [cacheBuster, setCacheBuster] = useState(Date.now());
 
     // Navigation State
-    const [activeTab, setActiveTab] = useState('dataset');
+    const [activeTab, setActiveTab] = useState('project_home');
     const [navItems, setNavItems] = useState([
-        { id: 'dataset', label: 'Dataset Info', icon: '📂' },
+        { type: 'header', label: 'PROJECT' },
+        { id: 'project_home', label: 'Project Info', icon: '🏠' },
+        { type: 'header', label: 'ANNOTATION' },
         { id: 'annotation', label: 'Manual Annotation', icon: '✏️' },
-        { id: 'preprocess', label: 'Pre-processing', icon: '✂️' },
         { id: 'labeling', label: 'Auto-Labeling', icon: '🤖' },
-        { id: 'processing', label: 'Data Processing', icon: '⚙️' },
-        { id: 'verification', label: 'Verification', icon: '✅' },
+        { type: 'header', label: 'PROCESSING' },
+        { id: 'preprocess', label: 'Pre-processing', icon: '✂️' },
+        { id: 'dataset_gen', label: 'Create Dataset', icon: '📦' },
+        { id: 'processing', label: 'Data Tools', icon: '⚙️' },
+        { type: 'header', label: 'ANALYSIS' },
+        { id: 'verification', label: 'Data Inspection', icon: '✅' },
         { id: 'stats', label: 'Statistics', icon: '📊' },
     ]);
+    const [newDatasetName, setNewDatasetName] = useState('dataset_v1');
+
 
     // File Browser State
     const [showFileBrowser, setShowFileBrowser] = useState(false);
@@ -88,6 +100,24 @@ function App() {
 
     // Verification Filtering
     const [filterClasses, setFilterClasses] = useState([]);
+
+    // Stats State
+    const [statsPath, setStatsPath] = useState('');
+
+    // Existing Datasets
+
+    // Existing Datasets
+    const [existingDatasets, setExistingDatasets] = useState([]);
+
+    const fetchDatasets = async () => {
+        if (!datasetPath) return; // Only if project path is set
+        try {
+            const res = await axios.get(`${API_BASE}/dataset/list?project_path=${encodeURIComponent(datasetPath)}`);
+            setExistingDatasets(res.data);
+        } catch (err) {
+            console.error("Failed to list datasets", err);
+        }
+    };
 
     // Single Auto-Label State
     const [labelingMode, setLabelingMode] = useState('batch'); // 'batch' or 'single'
@@ -162,15 +192,131 @@ function App() {
         return () => clearInterval(interval);
     }, [isTaskRunning]);
 
+    const handleCreateProject = async (data) => {
+        try {
+            const res = await axios.post(`${API_BASE}/project/create`, data);
+            handleLoadProject(res.data.path);
+        } catch (err) {
+            console.error(err);
+            alert("Error creating project: " + (err.response?.data?.detail || err.message));
+        }
+    };
+
+    const handleLoadProject = async (path) => {
+        try {
+            const res = await axios.post(`${API_BASE}/project/load`, { path });
+            setProjectConfig(res.data.config);
+            setProjectPaths(res.data.paths);
+            setActiveTab('project_home');
+            setDatasetPath(res.data.path);
+
+            // Set derived state
+            if (res.data.paths.processed) {
+                setLastProcessedDir(res.data.paths.processed);
+            }
+        } catch (err) {
+            console.error(err);
+            alert("Error loading project: " + (err.response?.data?.detail || err.message));
+        }
+    };
+
     // Auto-predict annotation path when dataset path changes
     useEffect(() => {
+        if (projectConfig && projectPaths) {
+            // In Project mode, 'annotation' tab should point to processed images for labeling
+            // The AnnotationTool will load images from here and save labels to project/annotations
+            if (projectPaths.processed) {
+                setAnnotationPath(projectPaths.processed);
+                // Also ensure we set a default class list if available (for the tool to pick up? 
+                // AnnotationTool picks up classes from data.yaml usually, but strictly speaking 
+                // we might want to pass 'classes' prop if supported. 
+                // Currently AnnotationTool fetches classes from 'datasetPath'.
+                // We rely on 'datasetPath' (the processed folder) having a data.yaml or classes.txt?
+                // No, in project mode, classes are in project root. 
+                // The backend 'save_annotation' should handle this.
+            }
+            return;
+        }
+
         if (datasetPath && datasetPath.trim() !== '') {
             // Predict annotation path: <folder>_processed_labeled
             const baseDir = datasetPath.replace(/\/+$/, '');
             const predicted = baseDir + '_processed_labeled';
             setAnnotationPath(predicted);
         }
-    }, [datasetPath]);
+    }, [datasetPath, projectConfig, projectPaths]);
+
+    // Project Mode: Handle Tab Switches to load necessary data
+    useEffect(() => {
+        if (!projectConfig || !projectPaths) return;
+
+        if (activeTab === 'preprocess') {
+            // Load sample from RAW images for cropping config
+            const rawPath = projectPaths.raw;
+            if (rawPath) {
+                axios.get(`${API_BASE}/dataset/sample?path=${encodeURIComponent(rawPath)}`)
+                    .then(res => {
+                        setSampleImage(res.data);
+                        // Also set crop from config if available
+                        if (projectConfig.crop && res.data.width) {
+                            const c = projectConfig.crop;
+                            setCrop({
+                                unit: '%',
+                                x: (c.x / res.data.width) * 100,
+                                y: (c.y / res.data.height) * 100,
+                                width: (c.width / res.data.width) * 100,
+                                height: (c.height / res.data.height) * 100
+                            });
+                        }
+                    })
+                    .catch(err => console.error("Failed to load sample for preprocess:", err));
+
+                // Set resize dimensions from config immediately
+                console.log("DEBUG: Preprocess Config Check:", projectConfig);
+                if (projectConfig) {
+                    if (projectConfig.resize_width !== undefined) {
+                        console.log("DEBUG: Setting resizeWidth to", projectConfig.resize_width);
+                        setResizeWidth(projectConfig.resize_width);
+                    }
+                    if (projectConfig.resize_height !== undefined) {
+                        console.log("DEBUG: Setting resizeHeight to", projectConfig.resize_height);
+                        setResizeHeight(projectConfig.resize_height);
+                    }
+                    if (projectConfig.model_path) {
+                        setModelPath(projectConfig.model_path);
+                    }
+                }
+            }
+        }
+
+
+        if (activeTab === 'verification') {
+            // Data Inspection: Load masked images from project
+            if (projectPaths.masked) {
+                handleLoadMaskedImages(projectPaths.masked);
+            }
+        }
+
+        if (activeTab === 'stats') {
+            fetchDatasets();
+        }
+    }, [activeTab, projectConfig, projectPaths]);
+
+    // Update scaledDisplay when crop or sampleImage changes
+    useEffect(() => {
+        if (sampleImage && sampleImage.width && crop.width && crop.height) {
+            const scaleX = sampleImage.width / 100;
+            const scaleY = sampleImage.height / 100;
+
+            setScaledDisplay({
+                x: Math.round(crop.x * scaleX),
+                y: Math.round(crop.y * scaleY),
+                width: Math.round(crop.width * scaleX),
+                height: Math.round(crop.height * scaleY)
+            });
+        }
+    }, [crop, sampleImage]);
+
 
     const handleLoadMaskedImages = async (path, offset = 0, append = false) => {
         try {
@@ -220,19 +366,30 @@ function App() {
         }
     };
 
-    const fetchStats = async () => {
-        if (!labelResult?.labeled_dir) {
-            console.error("fetchStats: labelResult.labeled_dir is missing", labelResult);
-            showNotification('Cannot fetch stats: Labeled directory not found. Please run auto-labeling or selecting a labeled dataset.');
-            return;
+    const fetchStats = async (pathOverride = null) => {
+        const targetPath = pathOverride || statsPath || labelResult?.labeled_dir;
+
+        if (!targetPath) {
+            // Need a path. If project mode, verify logic.
+            if (projectPaths?.annotations) {
+                // Fallback to annotations if nothing else
+                // But wait, user might not have set it.
+            } else {
+                console.error("fetchStats: targetPath missing");
+                return;
+            }
         }
+
+        const actualPath = targetPath || projectPaths?.annotations;
+        if (!actualPath) return;
+
         setStatsLoading(true);
         try {
-            console.log("Fetching stats for:", labelResult.labeled_dir);
-            const res = await axios.get(`${API_BASE}/labeled/stats?path=${encodeURIComponent(labelResult.labeled_dir)}`);
+            console.log("Fetching stats for:", actualPath);
+            const res = await axios.get(`${API_BASE}/labeled/stats?path=${encodeURIComponent(actualPath)}`);
             setDatasetStats(res.data);
+            setStatsPath(actualPath); // Sync state
             setActiveTab('stats');
-            console.log("Stats fetched and active tab set to 'stats'");
         } catch (err) {
             console.error("Error fetching stats:", err);
             showNotification('Error fetching stats: ' + (err.response?.data?.detail || err.message));
@@ -372,6 +529,11 @@ function App() {
         setActiveTab('annotation');
     };
 
+    const handleLandingBrowse = (cb, type) => {
+        setLandingCallback(() => cb);
+        openFileBrowser('landing_generic', type);
+    };
+
     // File Browser Logic
     const openFileBrowser = (target, type, index = -1) => {
         setBrowserTarget(target);
@@ -430,7 +592,11 @@ function App() {
             else if (browserTarget === 'extract_output') setExtractOutput(browserPath);
             else if (browserTarget === 'extract_source') setExtractSource(browserPath);
             else if (browserTarget === 'extract_output') setExtractOutput(browserPath);
+            else if (browserTarget === 'extract_output') setExtractOutput(browserPath);
             else if (browserTarget === 'split_input') setSplitInput(browserPath);
+            else if (browserTarget === 'landing_generic') {
+                if (landingCallback) landingCallback(browserPath);
+            }
         }
         setShowFileBrowser(false);
     };
@@ -449,6 +615,8 @@ function App() {
                             {browserTarget === 'merge_output' && 'Select Output Directory'}
                             {browserTarget === 'extract_source' && 'Select Labeled Dataset'}
                             {browserTarget === 'extract_output' && 'Select Extraction Output'}
+                            {browserTarget === 'landing_generic' && 'Select Folder'}
+
                         </h3>
                         <button className="browse-btn" onClick={() => setShowFileBrowser(false)}>Close</button>
                     </div>
@@ -544,8 +712,18 @@ function App() {
         setLabelResult(null);
         setTaskProgress({ status: 'processing', message: 'Starting...', current: 0, total: 100 });
         try {
+            // Determine Input/Output based on Project Mode
+            let inputPath = datasetPath;
+            let outputPath = null;
+
+            if (projectConfig && projectPaths) {
+                inputPath = projectPaths.raw;
+                outputPath = projectPaths.processed;
+            }
+
             const payload = {
-                dataset_path: datasetPath,
+                dataset_path: inputPath,
+                output_dir: outputPath,
                 resize_width: parseInt(resizeWidth),
                 resize_height: parseInt(resizeHeight)
             };
@@ -569,8 +747,14 @@ function App() {
         setIsTaskRunning(true);
         setTaskProgress({ status: 'labeling', message: 'Starting...', current: 0, total: 100 });
         try {
+            // Determine Input Path
+            let targetPath = lastProcessedDir || datasetPath;
+            if (projectPaths && projectPaths.processed) {
+                targetPath = projectPaths.processed;
+            }
+
             await axios.post(`${API_BASE}/autolabel`, {
-                dataset_path: lastProcessedDir || datasetPath,
+                dataset_path: targetPath,
                 model_path: modelPath,
                 confidence: parseFloat(confidence),
                 save_masked: true
@@ -684,8 +868,12 @@ function App() {
     };
 
     const handleExtractEmpty = async () => {
-        if (!datasetPath || !labelResult?.labeled_dir) {
-            showNotification('Please load a dataset with labels first.');
+        // Validation: If in project mode (StatsView), we use statsPath.
+        // If legacy mode, we use datasetPath.
+        const sourcePath = activeTab === 'stats' ? statsPath : datasetPath;
+
+        if (!sourcePath) {
+            showNotification('Please load a dataset or select a stats source first.');
             return;
         }
 
@@ -694,8 +882,8 @@ function App() {
 
         try {
             await axios.post(`${API_BASE}/dataset/extract_empty`, {
-                dataset_path: datasetPath,
-                labeled_root: labelResult.labeled_dir
+                dataset_path: sourcePath, // This will be treated as root/source for path resolution
+                labeled_root: activeTab === 'stats' ? (statsPath || projectPaths?.annotations) : labelResult?.labeled_dir
             });
             showNotification('Extraction task started...');
         } catch (err) {
@@ -1091,7 +1279,7 @@ function App() {
         );
     };
 
-    const scaledDisplay = calculateScaledCrop(completedCrop);
+    // const scaledDisplay = calculateScaledCrop(completedCrop);
 
 
 
@@ -1125,139 +1313,180 @@ function App() {
         );
     };
 
+
     const StatsView = () => {
-        if (!datasetStats) return (
-            <div style={{ padding: '80px 40px', textAlign: 'center', opacity: 0.5 }}>
-                <h3>No statistics available</h3>
-                <p>Run auto-labeling first to see dataset analytics.</p>
-                <button className="btn btn-primary" onClick={() => setActiveTab('labeling')}>Go to Labeling</button>
-            </div>
-        );
+        // Prepare options
+        const options = [
+            { label: 'Entire Project (Current State)', value: projectPaths?.annotations || '' },
+            ...existingDatasets.map(ds => ({ label: `Dataset: ${ds.name}`, value: ds.path }))
+        ];
+
+        // Handle selection
+        const handleSourceChange = (e) => {
+            const val = e.target.value;
+            if (val) {
+                setStatsPath(val);
+                fetchStats(val);
+            }
+        };
 
         return (
             <div className="stats-container">
-                <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', marginBottom: '30px' }}>
-                    <div className="stats-card glass">
-                        <div style={{ opacity: 0.6, fontSize: '0.9rem' }}>Total Images</div>
-                        <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>{datasetStats.total_images}</div>
-                    </div>
-                    <div className="stats-card glass">
-                        <div style={{ opacity: 0.6, fontSize: '0.9rem' }}>Total Objects</div>
-                        <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>{datasetStats.total_objects}</div>
-                    </div>
-                    <div className="stats-card glass">
-                        <div style={{ opacity: 0.6, fontSize: '0.9rem' }}>Empty Images</div>
-                        <div style={{ fontSize: '2rem', fontWeight: 'bold', color: datasetStats.empty_count > 0 ? '#ef4444' : 'var(--accent)' }}>
-                            {datasetStats.empty_count}
-                        </div>
-                    </div>
+                <div style={{ marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <label style={{ fontWeight: 'bold' }}>Stats Source:</label>
+                    <select
+                        className="input"
+                        style={{ maxWidth: '300px' }}
+                        value={statsPath || (projectPaths?.annotations || '')}
+                        onChange={handleSourceChange}
+                    >
+                        {options.map((opt, i) => (
+                            <option key={i} value={opt.value}>{opt.label}</option>
+                        ))}
+                    </select>
+                    <button className="btn btn-secondary" onClick={() => fetchStats(statsPath)}>🔄 Refresh</button>
                 </div>
 
-                <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '30px', marginBottom: '30px' }}>
-                    <div className="glass section-card">
-                        <div className="section-title" style={{ fontSize: '1.2rem', marginBottom: '20px' }}>Objects per Class</div>
-                        <div style={{ height: '350px' }}>
-                            <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={datasetStats.class_stats} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-                                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                                    <XAxis dataKey="name" stroke="var(--text-muted)" angle={-45} textAnchor="end" height={80} interval={0} />
-                                    <YAxis stroke="var(--text-muted)" />
-                                    <Tooltip
-                                        contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.9)', border: '1px solid var(--border-color)', borderRadius: '8px' }}
-                                        itemStyle={{ color: 'white' }}
-                                    />
-                                    <Bar dataKey="count" fill="var(--primary)" radius={[4, 4, 0, 0]}>
-                                        {datasetStats.class_stats.map((entry, index) => (
-                                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                                        ))}
-                                    </Bar>
-                                </BarChart>
-                            </ResponsiveContainer>
-                        </div>
+                {!datasetStats ? (
+                    <div style={{ padding: '40px', textAlign: 'center', opacity: 0.5 }}>
+                        Select a source to view statistics.
                     </div>
-
-                    <div className="glass section-card">
-                        <div className="section-title" style={{ fontSize: '1.2rem', marginBottom: '20px' }}>Class Distribution (%)</div>
-                        <div style={{ height: '350px' }}>
-                            <ResponsiveContainer width="100%" height="100%">
-                                <PieChart>
-                                    <Pie
-                                        data={datasetStats.class_stats}
-                                        dataKey="count"
-                                        nameKey="name"
-                                        cx="50%" cy="50%"
-                                        innerRadius={80}
-                                        outerRadius={120}
-                                        paddingAngle={5}
-                                    >
-                                        {datasetStats.class_stats.map((entry, index) => (
-                                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                                        ))}
-                                    </Pie>
-                                    <Tooltip
-                                        contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.9)', border: '1px solid var(--border-color)', borderRadius: '8px' }}
-                                        itemStyle={{ color: 'white' }}
-                                    />
-                                    <Legend />
-                                </PieChart>
-                            </ResponsiveContainer>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="glass section-card">
-                    <div className="section-title" style={{ fontSize: '1.2rem', marginBottom: '20px' }}>Detailed Report</div>
-                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                        <thead>
-                            <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>
-                                <th style={{ padding: '15px' }}>Class Name</th>
-                                <th style={{ padding: '15px' }}>Count</th>
-                                <th style={{ padding: '15px' }}>Percentage</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {datasetStats.class_stats.map((stat, i) => (
-                                <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                                    <td style={{ padding: '15px', fontWeight: 'bold' }}>{stat.name}</td>
-                                    <td style={{ padding: '15px' }}>{stat.count}</td>
-                                    <td style={{ padding: '15px' }}>{stat.percentage}%</td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-
-                {datasetStats.empty_count > 0 && (
-                    <div className="glass section-card" style={{ marginTop: '30px' }}>
-                        <div className="section-title" style={{ fontSize: '1.2rem', color: '#ef4444', marginBottom: '15px' }}>Images with No Detections</div>
-                        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                            {datasetStats.empty_images.map((name, i) => (
-                                <span key={i} className="badge" style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
-                                    {name}
-                                </span>
-                            ))}
-                        </div>
-                        <div style={{ marginTop: '25px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                                <button
-                                    className="btn btn-secondary"
-                                    style={{ borderColor: '#ef4444', color: '#ef4444' }}
-                                    onClick={handleExtractEmpty}
-                                    disabled={isTaskRunning}
-                                >
-                                    📦 Extract Empty Images to a Folder
-                                </button>
+                ) : (
+                    <>
+                        <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', marginBottom: '30px' }}>
+                            <div className="stats-card glass">
+                                <div style={{ opacity: 0.6, fontSize: '0.9rem' }}>Total Images</div>
+                                <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>{datasetStats.total_images}</div>
                             </div>
-                            <ProgressBar progress={taskProgress} type="extracting_empty" />
+                            <div className="stats-card glass">
+                                <div style={{ opacity: 0.6, fontSize: '0.9rem' }}>Total Objects</div>
+                                <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>{datasetStats.total_objects}</div>
+                            </div>
+                            <div className="stats-card glass">
+                                <div style={{ opacity: 0.6, fontSize: '0.9rem' }}>Empty Images</div>
+                                <div style={{ fontSize: '2rem', fontWeight: 'bold', color: datasetStats.empty_count > 0 ? '#ef4444' : 'var(--accent)' }}>
+                                    {datasetStats.empty_count}
+                                </div>
+                            </div>
                         </div>
-                    </div>
+
+                        <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '30px', marginBottom: '30px' }}>
+                            <div className="glass section-card">
+                                <div className="section-title" style={{ fontSize: '1.2rem', marginBottom: '20px' }}>Objects per Class</div>
+                                <div style={{ height: '350px' }}>
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <BarChart data={datasetStats.class_stats} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
+                                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                                            <XAxis dataKey="name" stroke="var(--text-muted)" angle={-45} textAnchor="end" height={80} interval={0} />
+                                            <YAxis stroke="var(--text-muted)" />
+                                            <Tooltip
+                                                contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.9)', border: '1px solid var(--border-color)', borderRadius: '8px' }}
+                                                itemStyle={{ color: 'white' }}
+                                            />
+                                            <Bar dataKey="count" fill="var(--primary)" radius={[4, 4, 0, 0]}>
+                                                {datasetStats.class_stats.map((entry, index) => (
+                                                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                                                ))}
+                                            </Bar>
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            </div>
+
+                            <div className="glass section-card">
+                                <div className="section-title" style={{ fontSize: '1.2rem', marginBottom: '20px' }}>Class Distribution (%)</div>
+                                <div style={{ height: '350px' }}>
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <PieChart>
+                                            <Pie
+                                                data={datasetStats.class_stats}
+                                                dataKey="count"
+                                                nameKey="name"
+                                                cx="50%" cy="50%"
+                                                innerRadius={80}
+                                                outerRadius={120}
+                                                paddingAngle={5}
+                                            >
+                                                {datasetStats.class_stats.map((entry, index) => (
+                                                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                                                ))}
+                                            </Pie>
+                                            <Tooltip
+                                                contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.9)', border: '1px solid var(--border-color)', borderRadius: '8px' }}
+                                                itemStyle={{ color: 'white' }}
+                                            />
+                                            <Legend />
+                                        </PieChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="glass section-card">
+                            <div className="section-title" style={{ fontSize: '1.2rem', marginBottom: '20px' }}>Detailed Report</div>
+                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                <thead>
+                                    <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>
+                                        <th style={{ padding: '15px' }}>Class Name</th>
+                                        <th style={{ padding: '15px' }}>Count</th>
+                                        <th style={{ padding: '15px' }}>Percentage</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {datasetStats.class_stats.map((stat, i) => (
+                                        <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                            <td style={{ padding: '15px', fontWeight: 'bold' }}>{stat.name}</td>
+                                            <td style={{ padding: '15px' }}>{stat.count}</td>
+                                            <td style={{ padding: '15px' }}>{stat.percentage}%</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        {datasetStats.empty_count > 0 && (
+                            <div className="glass section-card" style={{ marginTop: '30px' }}>
+                                <div className="section-title" style={{ fontSize: '1.2rem', color: '#ef4444', marginBottom: '15px' }}>Images with No Detections</div>
+                                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                                    {datasetStats.empty_images.map((name, i) => (
+                                        <span key={i} className="badge" style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+                                            {name}
+                                        </span>
+                                    ))}
+                                </div>
+                                <div style={{ marginTop: '25px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                        <button
+                                            className="btn btn-secondary"
+                                            style={{ borderColor: '#ef4444', color: '#ef4444' }}
+                                            onClick={handleExtractEmpty}
+                                            disabled={isTaskRunning}
+                                        >
+                                            📦 Extract Empty Images to a Folder
+                                        </button>
+                                    </div>
+                                    <ProgressBar progress={taskProgress} type="extracting_empty" />
+                                </div>
+                            </div>
+                        )}
+                    </>
                 )}
-            </div >
+            </div>
         );
     };
 
     return (
         <div className="app-wrapper">
+            {(!projectConfig) && (
+                <div style={{ position: 'absolute', inset: 0, zIndex: 100, background: '#111827' }}>
+                    <ProjectLanding
+                        onCreateProject={handleCreateProject}
+                        onLoadProject={handleLoadProject}
+                        onBrowse={handleLandingBrowse}
+                    />
+                    {showFileBrowser && <FileBrowserModal />}
+                </div>
+            )}
             <aside className="sidebar">
                 <div className="sidebar-logo">
                     <div className="logo-icon">Y</div>
@@ -1273,15 +1502,14 @@ function App() {
                                 if (item.id === 'stats') {
                                     if (labelResult?.labeled_dir) {
                                         fetchStats();
-                                    } else {
-                                        // If no labeled data, just switch tab to show empty state or notify
-                                        // But StatsView handles empty state? No, StatsView checks datasetStats.
-                                        // Let's just switch to stats so the user sees the "No stats available" message
-                                        // which prompts them to run labeling.
-                                        setActiveTab('stats');
                                     }
+                                    setActiveTab('stats');
                                 } else {
                                     setActiveTab(item.id);
+                                }
+
+                                if (item.id === 'dataset_gen' || item.id === 'processing') {
+                                    fetchDatasets();
                                 }
                             }}
                         >
@@ -1319,74 +1547,128 @@ function App() {
                 <LightboxModal />
 
                 <div className="container">
-                    {activeTab === 'dataset' && (
-                        <section className="glass section-card" style={{ maxWidth: '600px' }}>
-                            <div className="section-title">Step 1: Select Dataset</div>
-                            <div className="input-group">
-                                <label>Dataset Path (Local)</label>
-                                <div style={{ display: 'flex', gap: '10px' }}>
-                                    <input
-                                        type="text"
-                                        placeholder="/path/to/raw/images"
-                                        value={datasetPath}
-                                        onChange={(e) => setDatasetPath(e.target.value)}
-                                        style={{ flex: 1 }}
-                                    />
-                                    <button className="browse-btn" onClick={() => openFileBrowser('dataset', 'dir')}>
-                                        Browse
-                                    </button>
-                                </div>
-                            </div>
-                            <button className="btn btn-primary" onClick={loadDatasetInfo} disabled={isTaskRunning}>
-                                Scan Directory
-                            </button>
+                    {activeTab === 'project_home' && (
+                        <section className="glass section-card" style={{ maxWidth: '800px' }}>
+                            <div className="section-title">Project Overview</div>
 
-                            {datasetInfo && (
-                                <div className="stats-card" style={{ marginTop: '30px' }}>
-                                    <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Images Found</div>
-                                    <div className="stats-value" style={{ fontSize: '2.5rem' }}>{datasetInfo.count}</div>
-                                    <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '10px', wordBreak: 'break-all' }}>
-                                        {datasetInfo.path}
-                                    </div>
-                                </div>
-                            )}
-
-                            {projectConfig && (
+                            {projectConfig ? (
                                 <div className="stats-card glass" style={{ marginTop: '20px', textAlign: 'left', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
-                                    <div style={{ fontSize: '0.8rem', color: 'var(--accent)', fontWeight: 'bold', marginBottom: '15px', textTransform: 'uppercase', letterSpacing: '1px' }}>
-                                        Project Configuration
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                                        <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{projectConfig.name || 'Unnamed Project'}</div>
+                                        <div style={{ fontSize: '0.8rem', opacity: 0.6 }}>{datasetPath}</div>
                                     </div>
-                                    <div className="config-grid" style={{ display: 'grid', gap: '15px' }}>
-                                        {projectConfig.model_path && (
-                                            <div>
-                                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '4px' }}>Model Weights</div>
-                                                <div style={{ fontSize: '0.85rem', fontFamily: 'monospace', wordBreak: 'break-all', opacity: 0.9 }}>{projectConfig.model_path}</div>
-                                            </div>
-                                        )}
-                                        {projectConfig.labeled_dir && (
-                                            <div>
-                                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '4px' }}>Labeled Data</div>
-                                                <div style={{ fontSize: '0.85rem', fontFamily: 'monospace', wordBreak: 'break-all', opacity: 0.9 }}>{projectConfig.labeled_dir}</div>
-                                            </div>
-                                        )}
-                                        {projectConfig.masked_dir && (
-                                            <div>
-                                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '4px' }}>Masked Images</div>
-                                                <div style={{ fontSize: '0.85rem', fontFamily: 'monospace', wordBreak: 'break-all', opacity: 0.9 }}>{projectConfig.masked_dir}</div>
-                                            </div>
-                                        )}
-                                        {projectConfig.processed_dir && (
-                                            <div>
-                                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '4px' }}>Processed Data</div>
-                                                <div style={{ fontSize: '0.85rem', fontFamily: 'monospace', wordBreak: 'break-all', opacity: 0.9 }}>{projectConfig.processed_dir}</div>
-                                            </div>
-                                        )}
+
+                                    <div className="config-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                                        <div className="p-card" style={{ background: 'rgba(0,0,0,0.2)', padding: '15px', borderRadius: '8px' }}>
+                                            <div style={{ fontSize: '0.8rem', color: 'var(--accent)', marginBottom: '5px' }}>Raw Images</div>
+                                            <code style={{ fontSize: '0.9rem' }}>{projectPaths?.raw || 'N/A'}</code>
+                                        </div>
+                                        <div className="p-card" style={{ background: 'rgba(0,0,0,0.2)', padding: '15px', borderRadius: '8px' }}>
+                                            <div style={{ fontSize: '0.8rem', color: 'var(--accent)', marginBottom: '5px' }}>Processed Images</div>
+                                            <code style={{ fontSize: '0.9rem' }}>{projectPaths?.processed || projectConfig.processed_dir || 'N/A'}</code>
+                                        </div>
+                                        <div className="p-card" style={{ background: 'rgba(0,0,0,0.2)', padding: '15px', borderRadius: '8px' }}>
+                                            <div style={{ fontSize: '0.8rem', color: 'var(--accent)', marginBottom: '5px' }}>Annotations</div>
+                                            <code style={{ fontSize: '0.9rem' }}>{projectPaths?.annotations || 'N/A'}</code>
+                                        </div>
+                                        <div className="p-card" style={{ background: 'rgba(0,0,0,0.2)', padding: '15px', borderRadius: '8px' }}>
+                                            <div style={{ fontSize: '0.8rem', color: 'var(--accent)', marginBottom: '5px' }}>Labeled Datasets Root</div>
+                                            <code style={{ fontSize: '0.9rem' }}>{projectPaths?.labeled || projectConfig.labeled_dir || 'N/A'}</code>
+                                        </div>
+                                    </div>
+
+                                    <h4 style={{ marginTop: '20px', marginBottom: '10px' }}>Classes</h4>
+                                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                        {projectConfig.classes?.map((c, i) => (
+                                            <span key={i} style={{ padding: '5px 10px', background: 'rgba(99, 102, 241, 0.2)', borderRadius: '20px', fontSize: '0.85rem', border: '1px solid rgba(99, 102, 241, 0.3)' }}>
+                                                {c}
+                                            </span>
+                                        ))}
                                     </div>
                                 </div>
+                            ) : (
+                                <div>No Project Loaded</div>
                             )}
-
                         </section>
                     )}
+
+                    {activeTab === 'dataset_gen' && (
+                        <section className="glass section-card" style={{ maxWidth: '600px' }}>
+                            <div className="section-title">Generate Dataset</div>
+                            <p style={{ opacity: 0.7, marginBottom: '20px' }}>Create a YOLO dataset by merging processed images with their current annotations.</p>
+
+                            <div className="input-group">
+                                <label>Dataset Name</label>
+                                <input
+                                    type="text"
+                                    value={newDatasetName}
+                                    onChange={(e) => setNewDatasetName(e.target.value)}
+                                    placeholder="e.g. dataset_v1"
+                                />
+                            </div>
+
+                            <div className="input-group">
+                                <label>Strategy</label>
+                                <select disabled className="input">
+                                    <option>Use All Available Pairs</option>
+                                </select>
+                            </div>
+
+                            <button
+                                className="btn btn-primary"
+                                style={{ marginTop: '10px' }}
+                                onClick={async () => {
+                                    try {
+                                        setIsTaskRunning(true);
+                                        setTaskProgress({ status: 'creating_dataset', message: 'Creating dataset...', current: 0, total: 100 });
+                                        const res = await axios.post(`${API_BASE}/dataset/create`, {
+                                            project_path: datasetPath,
+                                            name: newDatasetName,
+                                            strategy: 'all'
+                                        });
+                                        showNotification(`Dataset created with ${res.data.count} images`);
+                                        setIsTaskRunning(false);
+                                        setTaskProgress(null);
+                                        fetchDatasets(); // Refresh list
+                                    } catch (err) {
+                                        showNotification('Error creating dataset: ' + (err.response?.data?.detail || err.message));
+                                        setIsTaskRunning(false);
+                                    }
+                                }}
+                                disabled={isTaskRunning}
+                            >
+                                Generate Dataset
+                            </button>
+                        </section>
+                    )}
+
+                    {activeTab === 'dataset_gen' && (
+                        <div style={{ marginTop: '30px' }}>
+                            <h3 className="section-title">Existing Datasets</h3>
+                            <div className="dataset-list" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '20px' }}>
+                                {existingDatasets.map((ds, idx) => (
+                                    <div key={idx} className="glass card" style={{ padding: '15px' }}>
+                                        <div style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>{ds.name}</div>
+                                        <div style={{ fontSize: '0.9rem', opacity: 0.7, marginTop: '5px' }}>
+                                            Images: {ds.image_count}
+                                        </div>
+                                        <div style={{ fontSize: '0.8rem', opacity: 0.5, marginTop: '5px' }}>
+                                            {new Date(ds.created_at * 1000).toLocaleString()}
+                                        </div>
+                                        <div style={{ marginTop: '10px', fontSize: '0.8rem', wordBreak: 'break-all', opacity: 0.6 }}>
+                                            {ds.path}
+                                        </div>
+                                    </div>
+                                ))}
+                                {existingDatasets.length === 0 && (
+                                    <div style={{ opacity: 0.5, gridColumn: '1 / -1', textAlign: 'center', padding: '20px' }}>
+                                        No datasets found in this project.
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
 
                     {activeTab === 'annotation' && (
                         <section className="glass section-card" style={{ height: 'calc(100vh - 150px)', overflow: 'hidden', padding: '10px' }}>
@@ -1649,6 +1931,9 @@ function App() {
                     {activeTab === 'preprocess' && (
                         <section className="glass section-card">
                             <div className="section-title">Step 2: Pre-processing Configuration</div>
+                            <div style={{ marginBottom: '15px', color: '#a1a1aa' }}>
+                                Source: <span style={{ fontFamily: 'monospace', color: '#e4e4e7' }}>{projectPaths?.raw || datasetPath}</span>
+                            </div>
                             <div className="grid" style={{ gridTemplateColumns: '1fr 350px', gap: '40px' }}>
                                 <div>
                                     {sampleImage ? (
@@ -1659,7 +1944,7 @@ function App() {
                                                 onComplete={c => setCompletedCrop(c)}
                                             >
                                                 <img
-                                                    src={`http://localhost:8000/static/dataset/${sampleImage.filename}`}
+                                                    src={sampleImage.sample_url}
                                                     style={{ maxWidth: '100%', display: 'block' }}
                                                     onLoad={(e) => setImgRef(e.currentTarget)}
                                                 />
@@ -1723,10 +2008,12 @@ function App() {
                                         </div>
                                     </div>
 
-                                    <button className="btn btn-primary" style={{ width: '100%' }} onClick={handlePreprocess} disabled={!datasetInfo || isTaskRunning}>
+                                    <button className="btn btn-primary" style={{ width: '100%' }} onClick={handlePreprocess} disabled={(!datasetInfo && !projectPaths) || isTaskRunning}>
                                         {isTaskRunning && taskProgress?.status === 'processing' ? 'Processing...' : 'Run Pre-processing'}
                                     </button>
                                     <ProgressBar progress={taskProgress} type="processing" />
+
+
                                 </div>
                             </div>
                         </section>
@@ -1806,7 +2093,7 @@ function App() {
 
                             {labelingMode === 'batch' ? (
                                 <>
-                                    <button className="btn btn-primary" style={{ height: '50px', fontSize: '1rem' }} onClick={handleAutoLabel} disabled={!datasetInfo || isTaskRunning}>
+                                    <button className="btn btn-primary" style={{ height: '50px', fontSize: '1rem' }} onClick={handleAutoLabel} disabled={(!datasetInfo && !projectPaths) || isTaskRunning}>
                                         {isTaskRunning && taskProgress?.status === 'labeling' ? 'Labeling in Progress...' : '⚡ Start Auto-Labeling'}
                                     </button>
 
