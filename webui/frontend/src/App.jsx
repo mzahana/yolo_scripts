@@ -1940,8 +1940,8 @@ function App() {
                                         <div className="crop-container" style={{ border: '1px solid var(--border-color)', borderRadius: '12px', background: '#000' }}>
                                             <ReactCrop
                                                 crop={crop}
-                                                onChange={c => setCrop(c)}
-                                                onComplete={c => setCompletedCrop(c)}
+                                                onChange={(_, percentCrop) => setCrop(percentCrop)}
+                                                onComplete={(_, percentCrop) => setCompletedCrop(percentCrop)}
                                             >
                                                 <img
                                                     src={sampleImage.sample_url}

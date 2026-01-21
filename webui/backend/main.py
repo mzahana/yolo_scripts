@@ -1515,6 +1515,7 @@ def discover_labels_dir(p: Path) -> Optional[Path]:
     candidates = [
         p / "labels", # Current path's labels subfolder
         root / "annotations", # Project-standard annotations folder
+        root / f"{identity}_datasets" / "labels",
         root / f"{identity}_labeled" / "labels",
         root / "labeled" / "labels",
         root / "labels" # Root's labels
@@ -1528,7 +1529,7 @@ def discover_labels_dir(p: Path) -> Optional[Path]:
     # Search for any directory ending with _labeled/labels
     if root.exists():
         for item in root.iterdir():
-            if item.is_dir() and item.name.startswith(identity) and item.name.endswith("_labeled"):
+            if item.is_dir() and item.name.startswith(identity) and (item.name.endswith("_labeled") or item.name.endswith("_datasets")):
                 if (item / "labels").exists():
                     return item / "labels"
                     
@@ -1759,7 +1760,7 @@ def get_dataset_stats(path: str):
                 if item.name.endswith("_processed"):
                     processed_dir = item
                     has_processed = True
-                elif item.name.endswith("_labeled"):
+                elif item.name.endswith("_labeled") or item.name.endswith("_datasets"):
                     labeled_dirs.append(item)
                 elif item.name.endswith("_masked_images"):
                      labeled_dirs.append(item)
@@ -1779,6 +1780,7 @@ def get_dataset_stats(path: str):
     potential_images = [
         labels_dir.parent / "images", # legacy root
         labels_dir.parent / "masked_images",
+        root / f"{identity}_datasets" / "images", # prefixed root
         root / f"{identity}_labeled" / "images", # prefixed root
         root / f"{identity}_masked_images",
         root / f"{identity}_processed_images", # Add processed images
@@ -1792,7 +1794,7 @@ def get_dataset_stats(path: str):
     # Try to search for ANY subdirectory starting with identity and ending with _labeled/images
     if root.exists():
         for item in root.iterdir():
-            if item.is_dir() and item.name.startswith(identity) and item.name.endswith("_labeled"):
+            if item.is_dir() and item.name.startswith(identity) and (item.name.endswith("_labeled") or item.name.endswith("_datasets")):
                 potential_images.append(item / "images")
             if item.is_dir() and item.name.startswith(identity) and item.name.endswith("_masked_images"):
                 potential_images.append(item)

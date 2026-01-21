@@ -19,7 +19,7 @@ class ProjectConfig(BaseModel):
         "annotations": "annotations",
         "masked": "images_masked",
         "filtered": "images_filtered",
-        "labeled": "datasets_labeled"
+        "labeled": "datasets"
     }
 
 class ProjectManager:
@@ -43,7 +43,7 @@ class ProjectManager:
             "annotations": project_root / "annotations",
             "masked": project_root / f"{name}_masked_images",
             "filtered": project_root / f"{name}_filtered_images",
-            "labeled": project_root / f"{name}_labeled"
+            "labeled": project_root / f"{name}_datasets"
         }
         
         for d in dirs.values():
@@ -126,7 +126,7 @@ class ProjectManager:
         
         rel_processed = config.get("dirs", {}).get("processed", f"{config.get('name')}_processed_images")
         rel_annotations = config.get("dirs", {}).get("annotations", "annotations")
-        rel_labeled = config.get("dirs", {}).get("labeled", f"{config.get('name')}_labeled")
+        rel_labeled = config.get("dirs", {}).get("labeled", f"{config.get('name')}_datasets")
         
         source_images = root / rel_processed
         source_labels = root / rel_annotations
@@ -198,7 +198,7 @@ class ProjectManager:
         except:
              return []
              
-        rel_labeled = config.get("dirs", {}).get("labeled", f"{config.get('name')}_labeled")
+        rel_labeled = config.get("dirs", {}).get("labeled", f"{config.get('name')}_datasets")
         labeled_root = root / rel_labeled
         
         datasets = []
