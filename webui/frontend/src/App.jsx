@@ -46,6 +46,7 @@ function App() {
     const [maskedMountUrl, setMaskedMountUrl] = useState('');
     const [maskedOffset, setMaskedOffset] = useState(0);
     const [totalMasked, setTotalMasked] = useState(0);
+    const [searchQuery, setSearchQuery] = useState('');
     const [projectConfig, setProjectConfig] = useState(null);
     const [projectPaths, setProjectPaths] = useState(null);
     const [landingCallback, setLandingCallback] = useState(null);
@@ -348,6 +349,9 @@ function App() {
             let url = `${API_BASE}/labeled/images?path=${encodeURIComponent(path)}&limit=${MASKED_LIMIT}&offset=${offset}`;
             if (filterClasses.length > 0) {
                 url += `&classes=${encodeURIComponent(filterClasses.join(','))}`;
+            }
+            if (searchQuery) {
+                url += `&search=${encodeURIComponent(searchQuery)}`;
             }
 
             const imagesRes = await axios.get(url);
@@ -1083,12 +1087,12 @@ function App() {
         });
     };
 
-    // Reload gallery when filter changes
+    // Reload gallery when filter or search changes
     useEffect(() => {
         if (maskedPath) {
             handleLoadMaskedImages(maskedPath);
         }
-    }, [filterClasses]);
+    }, [filterClasses, searchQuery]);
 
     const ProgressBar = ({ progress, type }) => {
         if (!progress) return null;
@@ -1140,6 +1144,30 @@ function App() {
                                 </button>
                             )}
                         </div>
+
+                        {/* Search Input */}
+                        <div style={{ flex: 1, margin: '0 20px', maxWidth: '300px' }}>
+                            <div className="input-group">
+                                <span className="input-prefix">🔎</span>
+                                <input
+                                    type="text"
+                                    className="input"
+                                    placeholder="Search images..."
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    style={{ paddingLeft: '35px' }}
+                                />
+                                {searchQuery && (
+                                    <button
+                                        onClick={() => setSearchQuery('')}
+                                        style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', opacity: 0.5 }}
+                                    >
+                                        ✕
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+
                         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                             <div style={{ fontSize: '0.8rem', opacity: 0.6 }}>
                                 Showing {maskedImages.length} of {totalMasked} images

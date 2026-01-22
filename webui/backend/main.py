@@ -1545,7 +1545,8 @@ def discover_labels_dir(p: Path) -> Optional[Path]:
     return None
 
 @app.get("/api/labeled/images")
-def list_labeled_images(path: str, limit: int = 20, offset: int = 0, classes: str = None):
+def get_labeled_images(path: str, limit: int = 50, offset: int = 0, classes: Optional[str] = None, search: Optional[str] = None):
+    print(f"Listing images in {path} with limit={limit}, offset={offset}, classes={classes}, search={search}")
     p = Path(path).absolute()
     if not p.exists() or not p.is_dir():
         return {"images": [], "total": 0, "offset": offset, "limit": limit}
@@ -1582,10 +1583,17 @@ def list_labeled_images(path: str, limit: int = 20, offset: int = 0, classes: st
              p = p / "images"
              files = get_supported_image_files(p)
     
+
     target_classes = []
     if classes:
         target_classes = [c.strip() for c in classes.split(',')]
         print(f"Filtering by classes: {target_classes}")
+
+    # SEARCH FILTERING
+    if search:
+        search_lower = search.lower()
+        files = [f for f in files if search_lower in f.name.lower()]
+        print(f"Filtered by search '{search}': {len(files)} files remaining")
 
     all_filtered_results = []
     # If we have class filtering, we unfortunately have to scan ALL files to know the total count
@@ -1632,9 +1640,11 @@ def list_labeled_images(path: str, limit: int = 20, offset: int = 0, classes: st
         total = len(results)
         results = results[offset:offset + limit]
     else:
-        total = len(files)
-        # results already contains the paged items, so no need to slice again with offset
-        # results = results[offset:offset + limit] <--- This was the BUG (double slicing)
+        # If we didn't filter by class, we already paginated 'files' if we didn't search either?
+        # WAIT: If we searched, 'files' is reduced. 
+        # If we didn't have target_classes, 'total' is len(files) (filtered). 
+        # 'paged_files' was sliced from 'files'.
+        # So 'results' corresponds to paged_files.
         pass
 
     return {
