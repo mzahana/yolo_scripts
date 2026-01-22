@@ -76,6 +76,8 @@ function App() {
         { id: 'stats', label: 'Statistics', icon: '📊' },
     ]);
     const [newDatasetName, setNewDatasetName] = useState('dataset_v1');
+    const [datasetStrategy, setDatasetStrategy] = useState('all');
+    const [datasetSplitRatios, setDatasetSplitRatios] = useState({ train: 70, val: 20, test: 10 });
 
 
     // File Browser State
@@ -316,6 +318,22 @@ function App() {
             });
         }
     }, [crop, sampleImage]);
+
+    // Load defaults from Project Config
+    useEffect(() => {
+        if (projectConfig) {
+            if (projectConfig.classes && Array.isArray(projectConfig.classes)) {
+                setAvailableClasses(projectConfig.classes);
+                // Also update filter classes if empty
+                // if (filterClasses.length === 0) setFilterClasses(projectConfig.classes);
+            }
+            // Load auto-label model
+            const mPath = projectConfig.model_path || projectConfig.model;
+            if (mPath) {
+                setModelPath(mPath);
+            }
+        }
+    }, [projectConfig]);
 
 
     const handleLoadMaskedImages = async (path, offset = 0, append = false) => {
@@ -867,7 +885,7 @@ function App() {
         }
     };
 
-    const handleExtractEmpty = async () => {
+    const handleExtractEmpty = async (imagesList = null) => {
         // Validation: If in project mode (StatsView), we use statsPath.
         // If legacy mode, we use datasetPath.
         const sourcePath = activeTab === 'stats' ? statsPath : datasetPath;
@@ -883,7 +901,8 @@ function App() {
         try {
             await axios.post(`${API_BASE}/dataset/extract_empty`, {
                 dataset_path: sourcePath, // This will be treated as root/source for path resolution
-                labeled_root: activeTab === 'stats' ? (statsPath || projectPaths?.annotations) : labelResult?.labeled_dir
+                labeled_root: activeTab === 'stats' ? (statsPath || projectPaths?.annotations) : labelResult?.labeled_dir,
+                images_list: Array.isArray(imagesList) ? imagesList : null
             });
             showNotification('Extraction task started...');
         } catch (err) {
@@ -1321,14 +1340,34 @@ function App() {
             ...existingDatasets.map(ds => ({ label: `Dataset: ${ds.name}`, value: ds.path }))
         ];
 
+        const [statsScope, setStatsScope] = useState('combined');
+
         // Handle selection
         const handleSourceChange = (e) => {
             const val = e.target.value;
             if (val) {
                 setStatsPath(val);
                 fetchStats(val);
+                setStatsScope('combined'); // Reset scope
             }
         };
+
+        const getDisplayStats = () => {
+            if (!datasetStats) return null;
+            if (statsScope === 'combined' || !datasetStats.per_split_stats || !datasetStats.per_split_stats[statsScope]) {
+                return datasetStats;
+            }
+            const s = datasetStats.per_split_stats[statsScope];
+            return {
+                total_images: s.total_images,
+                total_objects: s.total_objects,
+                empty_count: s.empty_images_count,
+                class_stats: s.class_counts.map(c => ({ name: c.class, count: c.count, percentage: c.percentage })),
+                empty_images: s.empty_images
+            };
+        };
+
+        const displayStats = getDisplayStats();
 
         return (
             <div className="stats-container">
@@ -1347,25 +1386,46 @@ function App() {
                     <button className="btn btn-secondary" onClick={() => fetchStats(statsPath)}>🔄 Refresh</button>
                 </div>
 
-                {!datasetStats ? (
+                {!displayStats ? (
                     <div style={{ padding: '40px', textAlign: 'center', opacity: 0.5 }}>
                         Select a source to view statistics.
                     </div>
                 ) : (
                     <>
+                        {datasetStats.per_split_stats && (
+                            <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+                                <button
+                                    className={`btn ${statsScope === 'combined' ? 'btn-primary' : 'btn-secondary'}`}
+                                    onClick={() => setStatsScope('combined')}
+                                >
+                                    Combined
+                                </button>
+                                {Object.keys(datasetStats.per_split_stats).map(split => (
+                                    <button
+                                        key={split}
+                                        className={`btn ${statsScope === split ? 'btn-primary' : 'btn-secondary'}`}
+                                        onClick={() => setStatsScope(split)}
+                                        style={{ textTransform: 'capitalize' }}
+                                    >
+                                        {split}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+
                         <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', marginBottom: '30px' }}>
                             <div className="stats-card glass">
                                 <div style={{ opacity: 0.6, fontSize: '0.9rem' }}>Total Images</div>
-                                <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>{datasetStats.total_images}</div>
+                                <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>{displayStats.total_images}</div>
                             </div>
                             <div className="stats-card glass">
                                 <div style={{ opacity: 0.6, fontSize: '0.9rem' }}>Total Objects</div>
-                                <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>{datasetStats.total_objects}</div>
+                                <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>{displayStats.total_objects}</div>
                             </div>
                             <div className="stats-card glass">
                                 <div style={{ opacity: 0.6, fontSize: '0.9rem' }}>Empty Images</div>
-                                <div style={{ fontSize: '2rem', fontWeight: 'bold', color: datasetStats.empty_count > 0 ? '#ef4444' : 'var(--accent)' }}>
-                                    {datasetStats.empty_count}
+                                <div style={{ fontSize: '2rem', fontWeight: 'bold', color: displayStats.empty_count > 0 ? '#ef4444' : 'var(--accent)' }}>
+                                    {displayStats.empty_count}
                                 </div>
                             </div>
                         </div>
@@ -1375,7 +1435,7 @@ function App() {
                                 <div className="section-title" style={{ fontSize: '1.2rem', marginBottom: '20px' }}>Objects per Class</div>
                                 <div style={{ height: '350px' }}>
                                     <ResponsiveContainer width="100%" height="100%">
-                                        <BarChart data={datasetStats.class_stats} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
+                                        <BarChart data={displayStats.class_stats} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
                                             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                                             <XAxis dataKey="name" stroke="var(--text-muted)" angle={-45} textAnchor="end" height={80} interval={0} />
                                             <YAxis stroke="var(--text-muted)" />
@@ -1399,15 +1459,17 @@ function App() {
                                     <ResponsiveContainer width="100%" height="100%">
                                         <PieChart>
                                             <Pie
-                                                data={datasetStats.class_stats}
+                                                data={displayStats.class_stats}
+                                                cx="50%"
+                                                cy="50%"
+                                                innerRadius={60}
+                                                outerRadius={100}
+                                                fill="#8884d8"
+                                                paddingAngle={5}
                                                 dataKey="count"
                                                 nameKey="name"
-                                                cx="50%" cy="50%"
-                                                innerRadius={80}
-                                                outerRadius={120}
-                                                paddingAngle={5}
                                             >
-                                                {datasetStats.class_stats.map((entry, index) => (
+                                                {displayStats.class_stats.map((entry, index) => (
                                                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                                                 ))}
                                             </Pie>
@@ -1433,7 +1495,7 @@ function App() {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {datasetStats.class_stats.map((stat, i) => (
+                                    {displayStats.class_stats.map((stat, i) => (
                                         <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                                             <td style={{ padding: '15px', fontWeight: 'bold' }}>{stat.name}</td>
                                             <td style={{ padding: '15px' }}>{stat.count}</td>
@@ -1444,31 +1506,45 @@ function App() {
                             </table>
                         </div>
 
-                        {datasetStats.empty_count > 0 && (
-                            <div className="glass section-card" style={{ marginTop: '30px' }}>
-                                <div className="section-title" style={{ fontSize: '1.2rem', color: '#ef4444', marginBottom: '15px' }}>Images with No Detections</div>
-                                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                                    {datasetStats.empty_images.map((name, i) => (
-                                        <span key={i} className="badge" style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
-                                            {name}
-                                        </span>
+                        <div className="glass section-card" style={{ marginTop: '30px' }}>
+                            <div className="section-title" style={{ fontSize: '1.2rem', color: '#ef4444', marginBottom: '15px' }}>Images with No Detections ({displayStats.empty_count})</div>
+                            {displayStats.empty_count > 0 ? (
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '10px', marginTop: '10px' }}>
+                                    {displayStats.empty_images.slice(0, 12).map((imgName, i) => (
+                                        <div key={i} className="card" style={{ padding: '10px', fontSize: '0.8rem', textAlign: 'center' }}>
+                                            {imgName}
+                                        </div>
                                     ))}
+                                    {displayStats.empty_images.length > 12 && (
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.5, fontSize: '0.8rem' }}>
+                                            +{displayStats.empty_images.length - 12} more
+                                        </div>
+                                    )}
                                 </div>
-                                <div style={{ marginTop: '25px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                                        <button
-                                            className="btn btn-secondary"
-                                            style={{ borderColor: '#ef4444', color: '#ef4444' }}
-                                            onClick={handleExtractEmpty}
-                                            disabled={isTaskRunning}
-                                        >
-                                            📦 Extract Empty Images to a Folder
-                                        </button>
+                            ) : (
+                                <div style={{ opacity: 0.5, fontStyle: 'italic', padding: '20px' }}>
+                                    All images have detections!
+                                </div>
+                            )}
+
+                            {displayStats.empty_count > 0 && (
+                                <div style={{ marginTop: '20px' }}>
+                                    <div style={{ marginTop: '25px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                            <button
+                                                className="btn btn-secondary"
+                                                style={{ borderColor: '#ef4444', color: '#ef4444' }}
+                                                onClick={() => handleExtractEmpty(displayStats.empty_images)}
+                                                disabled={isTaskRunning}
+                                            >
+                                                📦 Extract Empty Images to a Folder
+                                            </button>
+                                        </div>
+                                        <ProgressBar progress={taskProgress} type="extracting_empty" />
                                     </div>
-                                    <ProgressBar progress={taskProgress} type="extracting_empty" />
                                 </div>
-                            </div>
-                        )}
+                            )}
+                        </div>
                     </>
                 )}
             </div>
@@ -1609,23 +1685,77 @@ function App() {
 
                             <div className="input-group">
                                 <label>Strategy</label>
-                                <select disabled className="input">
-                                    <option>Use All Available Pairs</option>
+                                <select
+                                    className="input"
+                                    value={datasetStrategy}
+                                    onChange={(e) => setDatasetStrategy(e.target.value)}
+                                >
+                                    <option value="all">Use All Available Pairs</option>
+                                    <option value="split">Split Train/Val/Test</option>
                                 </select>
                             </div>
+
+                            {datasetStrategy === 'split' && (
+                                <div className="input-group">
+                                    <label>Split Ratios (%)</label>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+                                        <div>
+                                            <span style={{ fontSize: '0.8rem', opacity: 0.7 }}>Train</span>
+                                            <input
+                                                type="number"
+                                                value={datasetSplitRatios.train}
+                                                onChange={(e) => setDatasetSplitRatios({ ...datasetSplitRatios, train: parseInt(e.target.value) || 0 })}
+                                            />
+                                        </div>
+                                        <div>
+                                            <span style={{ fontSize: '0.8rem', opacity: 0.7 }}>Val</span>
+                                            <input
+                                                type="number"
+                                                value={datasetSplitRatios.val}
+                                                onChange={(e) => setDatasetSplitRatios({ ...datasetSplitRatios, val: parseInt(e.target.value) || 0 })}
+                                            />
+                                        </div>
+                                        <div>
+                                            <span style={{ fontSize: '0.8rem', opacity: 0.7 }}>Test</span>
+                                            <input
+                                                type="number"
+                                                value={datasetSplitRatios.test}
+                                                onChange={(e) => setDatasetSplitRatios({ ...datasetSplitRatios, test: parseInt(e.target.value) || 0 })}
+                                            />
+                                        </div>
+                                    </div>
+                                    {(datasetSplitRatios.train + datasetSplitRatios.val + datasetSplitRatios.test) !== 100 && (
+                                        <div style={{ color: '#ef4444', fontSize: '0.8rem', marginTop: '5px' }}>
+                                            Total: {datasetSplitRatios.train + datasetSplitRatios.val + datasetSplitRatios.test}% (Must be 100%)
+                                        </div>
+                                    )}
+                                </div>
+                            )}
 
                             <button
                                 className="btn btn-primary"
                                 style={{ marginTop: '10px' }}
+                                disabled={isTaskRunning || (datasetStrategy === 'split' && (datasetSplitRatios.train + datasetSplitRatios.val + datasetSplitRatios.test) !== 100)}
                                 onClick={async () => {
                                     try {
                                         setIsTaskRunning(true);
                                         setTaskProgress({ status: 'creating_dataset', message: 'Creating dataset...', current: 0, total: 100 });
-                                        const res = await axios.post(`${API_BASE}/dataset/create`, {
+
+                                        const payload = {
                                             project_path: datasetPath,
                                             name: newDatasetName,
-                                            strategy: 'all'
-                                        });
+                                            strategy: datasetStrategy
+                                        };
+
+                                        if (datasetStrategy === 'split') {
+                                            payload.split_ratios = [
+                                                datasetSplitRatios.train / 100,
+                                                datasetSplitRatios.val / 100,
+                                                datasetSplitRatios.test / 100
+                                            ];
+                                        }
+
+                                        const res = await axios.post(`${API_BASE}/dataset/create`, payload);
                                         showNotification(`Dataset created with ${res.data.count} images`);
                                         setIsTaskRunning(false);
                                         setTaskProgress(null);
@@ -1635,7 +1765,6 @@ function App() {
                                         setIsTaskRunning(false);
                                     }
                                 }}
-                                disabled={isTaskRunning}
                             >
                                 Generate Dataset
                             </button>
@@ -1651,6 +1780,16 @@ function App() {
                                         <div style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>{ds.name}</div>
                                         <div style={{ fontSize: '0.9rem', opacity: 0.7, marginTop: '5px' }}>
                                             Images: {ds.image_count}
+                                            {ds.splits && Object.keys(ds.splits).length > 0 && (
+                                                <div style={{ marginTop: '5px' }}>
+                                                    {Object.entries(ds.splits).map(([k, v]) => (
+                                                        <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                                                            <span style={{ textTransform: 'capitalize' }}>{k}:</span>
+                                                            <span>{v} ({Math.round(v / ds.image_count * 100)}%)</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
                                         <div style={{ fontSize: '0.8rem', opacity: 0.5, marginTop: '5px' }}>
                                             {new Date(ds.created_at * 1000).toLocaleString()}
@@ -1867,9 +2006,9 @@ function App() {
 
                             {/* Split Dataset Section */}
                             <div style={{ marginTop: '50px', paddingTop: '40px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
-                                <div className="section-title">Split: Split Dataset into Parcels</div>
+                                <div className="section-title">Split: Divide a dataset into splits</div>
                                 <p style={{ opacity: 0.7, marginBottom: '25px', fontSize: '0.9rem' }}>
-                                    Split a dataset into multiple equal parts.
+                                    Split a dataset into multiple equal parts (in the same directory you enter).
                                 </p>
 
                                 <div className="input-group">

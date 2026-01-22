@@ -115,6 +115,7 @@ class ProjectConfig(BaseModel):
 class ExtractEmptyRequest(BaseModel):
     dataset_path: str
     labeled_root: str
+    images_list: Optional[List[str]] = None
 
 class SplitRequest(BaseModel):
     input_path: str
@@ -1270,6 +1271,13 @@ def run_extract_empty_task(request: ExtractEmptyRequest):
         print(f"Extracting empty from {img_src_path} -> {output_dir} using labels from {labels_dir}")
         
         image_files = get_supported_image_files(img_src_path)
+        
+        # Filter if specific images requested
+        if request.images_list:
+            target_names = set(request.images_list)
+            image_files = [p for p in image_files if p.name in target_names]
+            print(f"Filtered extraction to {len(image_files)} specific images")
+
         app.state.task_progress["total"] = len(image_files)
         
         empty_count = 0
@@ -1718,16 +1726,18 @@ def get_dataset_stats(path: str):
         if list(p.glob("*.txt")):
             labels_dir = p
             
-    if not labels_dir:
+            
+    # Check for splits (train, valid, test)
+    splits = ["train", "valid", "test", "val"]
+    found_splits = [s for s in splits if (p / s).exists() and (p / s / "labels").exists()]
+
+    if not labels_dir and not found_splits:
         print(f"Labels directory not found in {p}")
         raise HTTPException(status_code=400, detail="Labels directory not found")
         
-    print(f"Resolved labels_dir: {labels_dir}")
+    print(f"Resolved labels_dir: {labels_dir} | Found splits: {found_splits}")
 
     # Load class names
-    print(f"Using labels directory: {labels_dir}")
-    
-    # Load class names using the unified helper
     # We pass 'root' because that's where config likely is, but p (dataset dir) works too
     names_list = load_classes_from_path(p) 
     class_names_map = {}
@@ -1735,119 +1745,177 @@ def get_dataset_stats(path: str):
         class_names_map = {i: n for i, n in enumerate(names_list)}
         print(f"Loaded {len(class_names_map)} class names using unified loader")
 
-    # Total images: try to find 'images' sibling, or 'masked_images', or count in p if mixed
-    # Try to strip task suffixes to find the base name for sibling discovery
-    # Use unified identity to find siblings and potential labels
-    root, identity = get_config_identity(p)
-    
-    # Find siblings that might contain processed or labeled data
-    processed_dir = None
-    labeled_dirs = []
-    has_processed = False
-    
-    # Generic candidates
-    if (root / "processed").exists():
-        processed_dir = root / "processed"
-        has_processed = True
-    if (root / "labeled").exists():
-        labeled_dirs.append(root / "labeled")
-
-    # Prefix-based candidates (the preferred approach)
-    if root.exists():
-        for item in root.iterdir():
-            if not item.is_dir(): continue
-            if item.name.startswith(identity):
-                if item.name.endswith("_processed"):
-                    processed_dir = item
-                    has_processed = True
-                elif item.name.endswith("_labeled") or item.name.endswith("_datasets"):
-                    labeled_dirs.append(item)
-                elif item.name.endswith("_masked_images"):
-                     labeled_dirs.append(item)
-
-
-    # Try to load exact processed dir from config
-    config_processed = None
-    try:
-        if (root / "project_config.json").exists():
-            with open(root / "project_config.json") as f:
-                pc = json.load(f)
-                if "dirs" in pc and "processed" in pc["dirs"]:
-                     config_processed = root / pc["dirs"]["processed"]
-    except: pass
-
-    total_images = 0
-    potential_images = [
-        labels_dir.parent / "images", # legacy root
-        labels_dir.parent / "masked_images",
-        root / f"{identity}_datasets" / "images", # prefixed root
-        root / f"{identity}_labeled" / "images", # prefixed root
-        root / f"{identity}_masked_images",
-        root / f"{identity}_processed_images", # Add processed images
-        root / "images",
-        root / "masked_images",
-        root / "processed_images", # Add legacy/standard processed name
-        processed_dir, # Add discovered processed dir
-        config_processed # Add configured processed dir
-    ]
-    
-    # Try to search for ANY subdirectory starting with identity and ending with _labeled/images
-    if root.exists():
-        for item in root.iterdir():
-            if item.is_dir() and item.name.startswith(identity) and (item.name.endswith("_labeled") or item.name.endswith("_datasets")):
-                potential_images.append(item / "images")
-            if item.is_dir() and item.name.startswith(identity) and item.name.endswith("_masked_images"):
-                potential_images.append(item)
-
-    images_dir = None
-    for pid in potential_images:
-        if pid and pid.exists() and pid.is_dir():
-            # Verify it has images
-            if get_supported_image_files(pid):
-                images_dir = pid
-                break
-            
-    if images_dir:
-         total_images = len(get_supported_image_files(images_dir))
-    else:
-         # Maybe images are in same folder?
-         total_images = len(get_supported_image_files(labels_dir))
-         
-    print(f"Counting objects in {labels_dir}")
-    empty_images = []
-    class_counts = {}
-    total_objects = 0
-    
-    labeled_stems = set()
-    for label_file in labels_dir.glob("*.txt"):
-        if label_file.name == "classes.txt": continue # Skip classes file
+    # Helper to aggregate stats
+    def aggregate_stats(target_labels_dir: Path, target_images_dir: Optional[Path]):
+        l_counts = {}
+        l_total_obj = 0
+        l_empty = []
+        l_total_img = 0
         
-        labeled_stems.add(label_file.stem)
-        has_obj = False
-        try:
-            with open(label_file, 'r') as f:
-                for line in f:
-                    parts = line.strip().split()
-                    if parts:
-                        has_obj = True
-                        cls_id = int(parts[0])
-                        cls_name = class_names_map.get(cls_id, f"class_{cls_id}")
-                        class_counts[cls_name] = class_counts.get(cls_name, 0) + 1
-                        total_objects += 1
-        except:
-            pass
+        if target_images_dir and target_images_dir.exists():
+            l_total_img = len(get_supported_image_files(target_images_dir))
+        elif target_labels_dir.exists():
+             # Fallback if images dir not separate
+             l_total_img = len(get_supported_image_files(target_labels_dir))
+             
+        # Count objects
+        labeled_stems = set()
+        if target_labels_dir.exists():
+            for label_file in target_labels_dir.glob("*.txt"):
+                if label_file.name == "classes.txt": continue
+                
+                labeled_stems.add(label_file.stem)
+                has_obj = False
+                try:
+                    with open(label_file, 'r') as f:
+                        for line in f:
+                            parts = line.strip().split()
+                            if parts:
+                                has_obj = True
+                                cls_id = int(parts[0])
+                                cls_name = class_names_map.get(cls_id, f"class_{cls_id}")
+                                l_counts[cls_name] = l_counts.get(cls_name, 0) + 1
+                                l_total_obj += 1
+                except: pass
+                
+                if not has_obj:
+                    l_empty.append(label_file.stem)
+        
+        # Check non-labeled images
+        if target_images_dir and target_images_dir.exists():
+            for img_p in get_supported_image_files(target_images_dir):
+                if img_p.stem not in labeled_stems:
+                    l_empty.append(img_p.stem)
+
+        return l_counts, l_total_obj, l_empty, l_total_img
+
+    if found_splits:
+        print(f"Detected split dataset with: {found_splits}")
+        total_images = 0
+        total_objects = 0
+        class_counts = {}
+        empty_images_list = []
+        
+    per_split_stats = {}
+    if found_splits:
+        print(f"Detected split dataset with: {found_splits}")
+        total_images = 0
+        total_objects = 0
+        class_counts = {}
+        empty_images_list = []
+        
+        for s in found_splits:
+            s_labels = p / s / "labels"
+            s_images = p / s / "images"
+            if not s_images.exists(): s_images = None
             
-        if not has_obj:
-            empty_images.append(label_file.stem)
+            c, o, e, i = aggregate_stats(s_labels, s_images)
+            
+            # Format individual split stats
+            split_data = []
+            for cls_name, count in c.items():
+                split_data.append({
+                    "class": cls_name,
+                    "count": count,
+                    "percentage": round((count / o) * 100, 2) if o > 0 else 0
+                })
+            split_data.sort(key=lambda x: x["count"], reverse=True)
+            
+            per_split_stats[s] = {
+                "total_images": i,
+                "total_objects": o,
+                "class_counts": split_data,
+                "empty_images_count": len(e),
+                "empty_images": e
+            }
 
-    # Also check for images that have NO label file at all
-    if images_dir:
-        image_files = get_supported_image_files(images_dir)
-        for img_p in image_files:
-            if img_p.stem not in labeled_stems:
-                empty_images.append(img_p.stem)
-
-    # Calculate percentages
+            # Merge
+            total_images += i
+            total_objects += o
+            empty_images_list.extend(e)
+            for k, v in c.items():
+                class_counts[k] = class_counts.get(k, 0) + v
+                
+        empty_images = empty_images_list # Flattened list
+        
+    else:
+        # ---- EXISTING FLAT LOGIC ----
+        
+        # Total images: try to find 'images' sibling, or 'masked_images', or count in p if mixed
+        # Try to strip task suffixes to find the base name for sibling discovery
+        # Use unified identity to find siblings and potential labels
+        root, identity = get_config_identity(p)
+        
+        # Find siblings that might contain processed or labeled data
+        processed_dir = None
+        labeled_dirs = []
+        has_processed = False
+        
+        # Generic candidates
+        if (root / "processed").exists():
+            processed_dir = root / "processed"
+            has_processed = True
+        if (root / "labeled").exists():
+            labeled_dirs.append(root / "labeled")
+    
+        # Prefix-based candidates (the preferred approach)
+        if root.exists():
+            for item in root.iterdir():
+                if not item.is_dir(): continue
+                if item.name.startswith(identity):
+                    if item.name.endswith("_processed"):
+                        processed_dir = item
+                        has_processed = True
+                    elif item.name.endswith("_labeled") or item.name.endswith("_datasets"):
+                        labeled_dirs.append(item)
+                    elif item.name.endswith("_masked_images"):
+                         labeled_dirs.append(item)
+    
+        # Try to load exact processed dir from config
+        config_processed = None
+        try:
+            if (root / "project_config.json").exists():
+                with open(root / "project_config.json") as f:
+                    pc = json.load(f)
+                    if "dirs" in pc and "processed" in pc["dirs"]:
+                         config_processed = root / pc["dirs"]["processed"]
+        except: pass
+    
+        potential_images = [
+            labels_dir.parent / "images", # legacy root
+            labels_dir.parent / "masked_images",
+            root / f"{identity}_datasets" / "images", # prefixed root
+            root / f"{identity}_labeled" / "images", # prefixed root
+            root / f"{identity}_masked_images",
+            root / f"{identity}_processed_images", # Add processed images
+            root / "images",
+            root / "masked_images",
+            root / "processed_images", # Add legacy/standard processed name
+            processed_dir, # Add discovered processed dir
+            config_processed # Add configured processed dir
+        ]
+        
+        # Try to search for ANY subdirectory starting with identity and ending with _labeled/images
+        if root.exists():
+            for item in root.iterdir():
+                if item.is_dir() and item.name.startswith(identity) and (item.name.endswith("_labeled") or item.name.endswith("_datasets")):
+                    potential_images.append(item / "images")
+                if item.is_dir() and item.name.startswith(identity) and item.name.endswith("_masked_images"):
+                    potential_images.append(item)
+    
+        images_dir = None
+        for pid in potential_images:
+            if pid and pid.exists() and pid.is_dir():
+                # Verify it has images
+                if get_supported_image_files(pid):
+                    images_dir = pid
+                    break
+                
+        c, o, e, i = aggregate_stats(labels_dir, images_dir)
+        class_counts = c
+        total_objects = o
+        empty_images = e
+        total_images = i
     stats_data = []
     for cls_name, count in class_counts.items():
         stats_data.append({
@@ -1864,7 +1932,8 @@ def get_dataset_stats(path: str):
         "total_objects": total_objects,
         "class_stats": stats_data,
         "empty_images": empty_images,
-        "empty_count": len(empty_images)
+        "empty_count": len(empty_images),
+        "per_split_stats": per_split_stats if 'per_split_stats' in locals() else None
     }
     print(f"Stats result: {result}")
     return result

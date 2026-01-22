@@ -2,6 +2,7 @@ import os
 import shutil
 import json
 import yaml
+import random
 from pathlib import Path
 from typing import List, Optional, Dict
 from pydantic import BaseModel
@@ -138,8 +139,8 @@ class ProjectManager:
             raise FileNotFoundError(f"Source annotations dir not found: {source_labels}")
             
         target_dataset.mkdir(parents=True, exist_ok=True)
-        (target_dataset / "images").mkdir(exist_ok=True)
-        (target_dataset / "labels").mkdir(exist_ok=True)
+        target_dataset.mkdir(parents=True, exist_ok=True)
+        # We delay subfolder creation until we know the strategy
         
         # Find matching pairs
         processed_count = 0
@@ -158,25 +159,86 @@ class ProjectManager:
             if txt_path.exists():
                 valid_pairs.append((img, txt_path))
         
-        # Apply strategy (TODO: Implement random sampling if needed, for now 'all')
+        # Apply strategy
         selected_pairs = valid_pairs
-        
-        # Copy files
-        for img, txt in selected_pairs:
-            shutil.copy2(img, target_dataset / "images" / img.name)
-            shutil.copy2(txt, target_dataset / "labels" / txt.name)
-            processed_count += 1
+        if strategy == "split":
+            random.shuffle(selected_pairs)
             
-        # Create data.yaml
-        classes = config.get("classes", [])
-        data_yaml = {
-            "path": str(target_dataset.absolute()), # Absolute path to be safe
-            "train": "images",
-            "val": "images", # Simplification: use same for val if no split
-            "nc": len(classes),
-            "names": classes
-        }
-        
+            total_pairs = len(selected_pairs)
+            train_ratio = split_ratios[0]
+            val_ratio = split_ratios[1] if len(split_ratios) > 1 else 0.0
+            test_ratio = split_ratios[2] if len(split_ratios) > 2 else 0.0
+            
+            # Re-normalize if needed or just use as is (assuming sum=1)
+            # Use counts to be safe
+            train_count = int(total_pairs * train_ratio)
+            val_count = int(total_pairs * val_ratio)
+            # test_count gets the remainder
+            test_count = total_pairs - train_count - val_count
+            
+            train_pairs = selected_pairs[:train_count]
+            val_pairs = selected_pairs[train_count:train_count+val_count]
+            test_pairs = selected_pairs[train_count+val_count:]
+            
+            sets = [
+                ("train", train_pairs),
+                ("valid", val_pairs),
+                ("test", test_pairs)
+            ]
+            
+            data_yaml_paths = {}
+            
+            for split_name, pairs in sets:
+                if not pairs:
+                    # If empty split (e.g. test=0)
+                    continue
+                    
+                split_dir = target_dataset / split_name
+                (split_dir / "images").mkdir(parents=True, exist_ok=True)
+                (split_dir / "labels").mkdir(parents=True, exist_ok=True)
+                
+                for img, txt in pairs:
+                    shutil.copy2(img, split_dir / "images" / img.name)
+                    shutil.copy2(txt, split_dir / "labels" / txt.name)
+                    
+                data_yaml_paths[split_name] = f"{split_name}/images"
+                
+            processed_count = len(selected_pairs)
+            
+            # Create data.yaml for SPLIT
+            classes = config.get("classes", [])
+            data_yaml = {
+                "path": str(target_dataset.absolute()), 
+                "train": data_yaml_paths.get("train", "train/images"),
+                "val": data_yaml_paths.get("valid", data_yaml_paths.get("train", "train/images")), # Ultralytics uses 'val' key for validation data
+                "test": data_yaml_paths.get("test", None),
+                "nc": len(classes),
+                "names": classes
+            }
+            # Remove test key if None
+            if data_yaml["test"] is None:
+                del data_yaml["test"]
+                
+        else:
+            # Default 'all'
+            (target_dataset / "images").mkdir(exist_ok=True)
+            (target_dataset / "labels").mkdir(exist_ok=True)
+            
+            for img, txt in selected_pairs:
+                shutil.copy2(img, target_dataset / "images" / img.name)
+                shutil.copy2(txt, target_dataset / "labels" / txt.name)
+                processed_count += 1
+                
+            # Create data.yaml for FLAT
+            classes = config.get("classes", [])
+            data_yaml = {
+                "path": str(target_dataset.absolute()),
+                "train": "images",
+                "val": "images",
+                "nc": len(classes),
+                "names": classes
+            }
+
         with open(target_dataset / "data.yaml", 'w') as f:
              yaml.dump(data_yaml, f, sort_keys=False)
              
@@ -207,14 +269,23 @@ class ProjectManager:
                 if item.is_dir() and (item / "data.yaml").exists():
                     # It's a valid YOLO dataset
                     # Count images
+                    splits_counts = {}
                     img_count = 0
                     if (item / "images").exists():
-                        img_count = len(list((item / "images").glob("*.*")))
+                        img_count = len([x for x in (item / "images").iterdir() if x.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff']])
+                    else:
+                        # Count splits
+                        for sub in ["train", "valid", "val", "test"]:
+                             if (item / sub / "images").exists():
+                                 c = len([x for x in (item / sub / "images").iterdir() if x.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff']])
+                                 splits_counts[sub] = c
+                                 img_count += c
                         
                     datasets.append({
                         "name": item.name,
                         "path": str(item),
                         "image_count": img_count,
+                        "splits": splits_counts,
                         "created_at": item.stat().st_ctime # Approx
                     })
         
