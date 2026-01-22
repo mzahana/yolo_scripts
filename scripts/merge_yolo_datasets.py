@@ -112,14 +112,21 @@ def validate_datasets(dataset_dirs):
                 issues.append(f"Missing data.yaml in: {dataset_dir}")
             
             # Check for standard splits
+            splits_found = False
             for split in ["train", "valid", "test"]:
-                images_path = os.path.join(dataset_dir, split, "images")
-                labels_path = os.path.join(dataset_dir, split, "labels")
-                
-                if not os.path.exists(images_path):
-                    warnings_list.append(f"Missing {split}/images in: {dataset_name}")
-                if not os.path.exists(labels_path):
-                    warnings_list.append(f"Missing {split}/labels in: {dataset_name}")
+                if os.path.exists(os.path.join(dataset_dir, split, "images")):
+                    splits_found = True
+            
+            # Check for flat structure
+            flat_images = os.path.join(dataset_dir, "images")
+            flat_labels = os.path.join(dataset_dir, "labels")
+            
+            if not splits_found and not (os.path.exists(flat_images) and os.path.exists(flat_labels)):
+                 issues.append(f"Invalid structure in {dataset_name}: Needs either train/valid/test splits OR images/labels subdirectories")
+            
+            if splits_found:
+                 # Warn if some splits missing but not fatal
+                 pass
     
     # Show warnings if any
     if warnings_list:
@@ -225,8 +232,12 @@ def collect_all_files(dataset_dirs, class_mappings) -> Tuple[List[Tuple[str, str
     # First, count total files for progress bar
     total_files = 0
     for dataset_dir in dataset_dirs:
-        for split in ["train", "valid", "test"]:
-            images_src = os.path.join(dataset_dir, split, "images")
+        for split in ["train", "valid", "test", "flat"]:
+            if split == "flat":
+                 images_src = os.path.join(dataset_dir, "images")
+            else:
+                 images_src = os.path.join(dataset_dir, split, "images")
+            
             if os.path.exists(images_src):
                 total_files += len([f for f in os.listdir(images_src) 
                                   if os.path.isfile(os.path.join(images_src, f))])
@@ -236,9 +247,18 @@ def collect_all_files(dataset_dirs, class_mappings) -> Tuple[List[Tuple[str, str
         for dataset_idx, dataset_dir in enumerate(dataset_dirs):
             dataset_name = Path(dataset_dir).name
             
-            for split in ["train", "valid", "test"]:
-                images_src = os.path.join(dataset_dir, split, "images")
-                labels_src = os.path.join(dataset_dir, split, "labels")
+            # Check if flat
+            is_flat = os.path.exists(os.path.join(dataset_dir, "images")) and not os.path.exists(os.path.join(dataset_dir, "train"))
+            # Iterate splits or flat
+            splits_to_check = ["flat"] if is_flat else ["train", "valid", "test"]
+
+            for split in splits_to_check:
+                if split == "flat":
+                     images_src = os.path.join(dataset_dir, "images")
+                     labels_src = os.path.join(dataset_dir, "labels")
+                else:
+                     images_src = os.path.join(dataset_dir, split, "images")
+                     labels_src = os.path.join(dataset_dir, split, "labels")
                 
                 if os.path.exists(images_src) and os.path.exists(labels_src):
                     image_files = [f for f in os.listdir(images_src) 
@@ -423,11 +443,29 @@ def merge_datasets_preserve_splits(dataset_dirs, output_dir):
             dataset_name = Path(dataset_dir).name
             main_pbar.set_description(f"Dataset {dataset_name}")
             
-            for split in ["train", "valid", "test"]:
-                images_src = os.path.join(dataset_dir, split, "images")
-                labels_src = os.path.join(dataset_dir, split, "labels")
-                images_dst = os.path.join(output_dir, split, "images")
-                labels_dst = os.path.join(output_dir, split, "labels")
+            # Determine hierarchy
+            branches = ["train", "valid", "test"]
+            is_flat = os.path.exists(os.path.join(dataset_dir, "images")) and not os.path.exists(os.path.join(dataset_dir, "train"))
+            if is_flat:
+                 branches = ["flat"]
+
+            for split in branches:
+                if split == "flat":
+                     images_src = os.path.join(dataset_dir, "images")
+                     labels_src = os.path.join(dataset_dir, "labels")
+                     # Map flat to train for preservation mode?
+                     # Or maybe we need a dedicated "train" target anyway
+                     # Let's map flat -> train by default
+                     images_dst = os.path.join(output_dir, "train", "images")
+                     labels_dst = os.path.join(output_dir, "train", "labels")
+                     # Tracking key uses "train" effectively
+                     split_key = "train"
+                else:
+                     images_src = os.path.join(dataset_dir, split, "images")
+                     labels_src = os.path.join(dataset_dir, split, "labels")
+                     images_dst = os.path.join(output_dir, split, "images")
+                     labels_dst = os.path.join(output_dir, split, "labels")
+                     split_key = split
 
                 if os.path.exists(images_src) and os.path.exists(labels_src):
                     # Get list of files
@@ -441,7 +479,7 @@ def merge_datasets_preserve_splits(dataset_dirs, output_dir):
                         src_path = os.path.join(images_src, img_file)
                         
                         # Check for filename conflict
-                        if img_file in file_tracking[f"{split}_images"]:
+                        if img_file in file_tracking[f"{split_key}_images"]:
                             # Generate unique filename
                             name, ext = os.path.splitext(img_file)
                             suffix = generate_unique_suffix(dataset_idx, src_path)
@@ -450,10 +488,11 @@ def merge_datasets_preserve_splits(dataset_dirs, output_dir):
                             conflict_count += 1
                         else:
                             dst_path = os.path.join(images_dst, img_file)
-                            file_tracking[f"{split}_images"].add(img_file)
+                            file_tracking[f"{split_key}_images"].add(img_file)
                         
                         shutil.copy2(src_path, dst_path)
-                        split_sizes[split] += 1
+                        # Update size for correct split key
+                        split_sizes[split_key] += 1
                         main_pbar.update(1)
 
                     # Copy and remap labels with conflict handling
@@ -461,7 +500,7 @@ def merge_datasets_preserve_splits(dataset_dirs, output_dir):
                         src_path = os.path.join(labels_src, label_file)
                         
                         # Check for filename conflict
-                        if label_file in file_tracking[f"{split}_labels"]:
+                        if label_file in file_tracking[f"{split_key}_labels"]:
                             # Generate unique filename (matching the image rename)
                             name, ext = os.path.splitext(label_file)
                             suffix = generate_unique_suffix(dataset_idx, src_path)
@@ -469,7 +508,7 @@ def merge_datasets_preserve_splits(dataset_dirs, output_dir):
                             dst_path = os.path.join(labels_dst, new_label_file)
                         else:
                             dst_path = os.path.join(labels_dst, label_file)
-                            file_tracking[f"{split}_labels"].add(label_file)
+                            file_tracking[f"{split_key}_labels"].add(label_file)
                         
                         # Remap class indices if needed
                         if dataset_idx in class_mappings and class_mappings[dataset_idx]:

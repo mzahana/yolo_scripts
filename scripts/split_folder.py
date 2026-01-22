@@ -34,24 +34,17 @@ def split_folder(input_dir: str, num_splits: int, callback=None):
         raise ValueError(f"Input directory does not exist: {input_dir}")
 
     # Detect structure
-    has_structure = (input_path / "images").exists() and (input_path / "images").is_dir()
-    source_dir = input_path / "images" if has_structure else input_path
+    splits_found = []
+    for split in ["train", "valid", "test", "val"]:
+        if (input_path / split / "images").exists():
+            splits_found.append(split)
+            
+    has_splits = len(splits_found) > 0
+    has_structure = has_splits or ((input_path / "images").exists() and (input_path / "images").is_dir())
     
-    # Gather images
-    images = get_image_files(source_dir)
-    if not images:
-        raise ValueError(f"No objects found in {source_dir}")
-    
-    # Shuffle for random distribution
-    random.shuffle(images)
-    
-    total_images = len(images)
-    
-    # Distribute images
+    # Cleaning up previous splits
     parent_dir = input_path.parent
     base_name = input_path.name
-
-    # Cleaning up previous splits
     print(f"Checking for previous splits in {parent_dir}...")
     for item in parent_dir.iterdir():
         if item.is_dir() and item.name.startswith(f"{base_name}_split"):
@@ -62,57 +55,96 @@ def split_folder(input_dir: str, num_splits: int, callback=None):
                 print(f"Error removing {item}: {e}")
 
     processed_count = 0
-    splits = [[] for _ in range(num_splits)]
-    for idx, img in enumerate(images):
-        splits[idx % num_splits].append(img)
-
-    for i, split_images in enumerate(splits):
-        split_idx = i + 1
-        output_dir = parent_dir / f"{base_name}_split{split_idx}"
-        output_dir.mkdir(exist_ok=True)
+    
+    # Function to distribute a list of images into N splits
+    def distribute_images(image_list, subpath=""):
+        nonlocal processed_count
+        random.shuffle(image_list)
         
-        # Prepare output structure
-        out_images_dir = output_dir
-        out_labels_dir = output_dir
-        
-        if has_structure:
-            out_images_dir = output_dir / "images"
-            out_labels_dir = output_dir / "labels"
-            out_images_dir.mkdir(exist_ok=True)
-            out_labels_dir.mkdir(exist_ok=True)
+        # Create chunks
+        chunks = [[] for _ in range(num_splits)]
+        for i, img in enumerate(image_list):
+            chunks[i % num_splits].append(img)
             
-            # Copy data.yaml if exists (only to the first split or all? All makes them independent datasets)
+        for i, chunk in enumerate(chunks):
+            split_idx = i + 1
+            output_dir = parent_dir / f"{base_name}_split{split_idx}"
+            
+            # Destination path logic
+            if subpath: # Split dataset case: _splitX / train / images
+                out_images_dir = output_dir / subpath / "images"
+                out_labels_dir = output_dir / subpath / "labels"
+            elif has_structure: # Flat but structured: _splitX / images
+                out_images_dir = output_dir / "images"
+                out_labels_dir = output_dir / "labels"
+            else: # Completely Flat: _splitX
+                out_images_dir = output_dir
+                out_labels_dir = output_dir
+            
+            out_images_dir.mkdir(parents=True, exist_ok=True)
+            out_labels_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Copy data.yaml if exists and not already there
             yaml_path = input_path / "data.yaml"
-            if yaml_path.exists():
+            dst_yaml = output_dir / "data.yaml"
+            if yaml_path.exists() and not dst_yaml.exists():
                 shutil.copy2(yaml_path, output_dir)
 
-        for img_path in split_images:
-            # Copy image
-            shutil.copy2(img_path, out_images_dir)
-            
-            # Handle labels
-            label_found = False
-            
-            # 1. Check if structured (look in sibling labels folder)
-            if has_structure:
-                # input was .../dataset/images/img.jpg
-                # looking for .../dataset/labels/img.txt
-                src_labels_dir = input_path / "labels"
-                if src_labels_dir.exists():
-                    label_path = src_labels_dir / f"{img_path.stem}.txt"
-                    if label_path.exists():
-                        shutil.copy2(label_path, out_labels_dir)
-                        label_found = True
-            
-            # 2. If not structured or label not found yet, check same directory (flat)
-            if not label_found:
-                label_path = img_path.with_suffix('.txt')
-                if label_path.exists():
-                    # If structured output, put in labels folder, else flat
-                    shutil.copy2(label_path, out_labels_dir)
+            for img_path in chunk:
+                # Copy Image
+                shutil.copy2(img_path, out_images_dir)
+                
+                # Copy Label
+                label_name = f"{img_path.stem}.txt"
+                
+                # Search strategy
+                candidates = []
+                
+                # 1. Sibling labels folder (relative to image parent)
+                if (img_path.parent.parent / "labels" / label_name).exists():
+                    candidates.append(img_path.parent.parent / "labels" / label_name)
+                    
+                # 2. Input root labels (for flat structured)
+                if (input_path / "labels" / label_name).exists():
+                    candidates.append(input_path / "labels" / label_name)
+                    
+                # 3. Same folder
+                if (img_path.with_suffix(".txt")).exists():
+                     candidates.append(img_path.with_suffix(".txt"))
+                     
+                for lp in candidates:
+                    if lp.exists():
+                        shutil.copy2(lp, out_labels_dir)
+                        break
+                        
+                processed_count += 1
+                if callback:
+                    # We pass processed_count so far
+                    # Total is roughly known via pre-calculation below
+                    pass
 
-            processed_count += 1
-            if callback:
-                callback(processed_count, total_images)
+    # Execution Flow
+    if has_splits:
+        total_images = 0
+        all_work = []
+        for split in splits_found:
+            imgs = get_image_files(input_path / split / "images")
+            all_work.append((split, imgs))
+            total_images += len(imgs)
+            
+        for split, imgs in all_work:
+            distribute_images(imgs, subpath=split)
+            # Roughly update progress? 
+            # distribute matches processed_count
+            if callback: callback(processed_count, total_images)
+            
+    else:
+        # Flat or "images/labels" root
+        source_dir = input_path / "images" if has_structure else input_path
+        images = get_image_files(source_dir)
+        if not images:
+             raise ValueError(f"No objects found in {source_dir}")
+        distribute_images(images, subpath="")
+        if callback: callback(processed_count, len(images))
 
     return processed_count

@@ -90,6 +90,15 @@ class YOLODatasetSplitter:
         else:
             self.output_root = Path(output_dir).resolve()
 
+        # Check if input is already split
+        self.is_already_split = False
+        if (self.parent_dir / "train").exists() or (self.parent_dir / "valid").exists():
+            self.is_already_split = True
+            print(f"Detected split dataset structure in {self.parent_dir}")
+        else:
+            self.images_dir = self.parent_dir / "images"
+            self.labels_dir = self.parent_dir / "labels"
+
         # Statistics tracking
         self.stats = {
             'train': {'images': 0, 'labels': 0, 'missing_labels': []},
@@ -99,10 +108,20 @@ class YOLODatasetSplitter:
 
     def validate_directories(self):
         """Validate that required input directories exist."""
-        if not self.images_dir.exists():
-            raise FileNotFoundError(f"Images directory not found: {self.images_dir}")
-        if not self.labels_dir.exists():
-            raise FileNotFoundError(f"Labels directory not found: {self.labels_dir}")
+        if self.is_already_split:
+            # At least one split should exist
+            splits_found = False
+            for split in ['train', 'valid', 'test', 'val']:
+                if (self.parent_dir / split / 'images').exists():
+                    splits_found = True
+                    break
+            if not splits_found:
+                raise FileNotFoundError(f"No valid split subdirectories (train/valid/test) found in {self.parent_dir}")
+        else:
+            if not self.images_dir.exists():
+                raise FileNotFoundError(f"Images directory not found: {self.images_dir}")
+            if not self.labels_dir.exists():
+                raise FileNotFoundError(f"Labels directory not found: {self.labels_dir}")
 
     def create_output_directories(self) -> Dict[str, Dict[str, Path]]:
         """Create output directory structure for train/valid/test splits."""
@@ -117,14 +136,23 @@ class YOLODatasetSplitter:
         return dirs
 
     def get_image_files(self) -> List[Path]:
-        """Get all image files from the images directory."""
+        """Get all image files from the images directory or all splits."""
         image_files = []
-        for ext in self.SUPPORTED_IMAGE_FORMATS:
-            image_files.extend(self.images_dir.glob(f'*{ext}'))
-            image_files.extend(self.images_dir.glob(f'*{ext.upper()}'))
+        
+        if self.is_already_split:
+            for split in ['train', 'valid', 'test', 'val']:
+                split_img_dir = self.parent_dir / split / 'images'
+                if split_img_dir.exists():
+                    for ext in self.SUPPORTED_IMAGE_FORMATS:
+                        image_files.extend(split_img_dir.glob(f'*{ext}'))
+                        image_files.extend(split_img_dir.glob(f'*{ext.upper()}'))
+        else:
+            for ext in self.SUPPORTED_IMAGE_FORMATS:
+                image_files.extend(self.images_dir.glob(f'*{ext}'))
+                image_files.extend(self.images_dir.glob(f'*{ext.upper()}'))
 
         if not image_files:
-            raise ValueError(f"No image files found in {self.images_dir}")
+            raise ValueError(f"No image files found in {self.parent_dir}")
 
         return sorted(image_files)  # Sort for consistency
 
@@ -163,7 +191,15 @@ class YOLODatasetSplitter:
 
             # Find and copy corresponding label file
             label_name = img_file.stem + '.txt'
-            label_file = self.labels_dir / label_name
+            
+            if self.is_already_split:
+                # If already split, label is likely in sibling "labels" dir of the image's parent
+                # images parent is <split>/images, so we want <split>/labels
+                # img_file.parent = .../split/images
+                # img_file.parent.parent = .../split
+                label_file = img_file.parent.parent / "labels" / label_name
+            else:
+                label_file = self.labels_dir / label_name
 
             if label_file.exists():
                 shutil.copy2(label_file, target_dirs['labels'])

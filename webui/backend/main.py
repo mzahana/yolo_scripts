@@ -996,47 +996,96 @@ def run_merge_task(request: MergeRequest):
         app.state.task_progress["message"] = f"Found {len(file_list)} images to merge. Starting copy..."
 
         # 3. Copy with renaming and remapping
-        os.makedirs(output_dir / "images", exist_ok=True)
-        os.makedirs(output_dir / "labels", exist_ok=True)
         
+        processed_count = 0
         name_counts = {} # To handle collisions
         
+        # Track output splits
+        preserved_splits = set()
+        
         for i, (img_src, label_src, dataset_idx) in enumerate(file_list):
-            img_name = img_src.name
-            target_name = img_name
-            
-            # Conflict handling: prepend dataset index if collision
-            if img_name in name_counts:
-                 target_name = f"d{dataset_idx}_{img_name}"
-            name_counts[target_name] = True
-            
-            # Copy image
-            shutil.copy2(img_src, output_dir / "images" / target_name)
-            
-            # Remap labels
-            mapping = class_mappings[dataset_idx]
-            remapped_lines = []
-            with open(label_src, 'r') as f:
-                for line in f:
-                    parts = line.strip().split()
-                    if parts:
-                        local_cls = int(parts[0])
-                        global_cls = mapping.get(local_cls, local_cls)
-                        parts[0] = str(global_cls)
-                        remapped_lines.append(" ".join(parts) + "\n")
-            
-            with open(output_dir / "labels" / f"{Path(target_name).stem}.txt", 'w') as f:
-                f.writelines(remapped_lines)
-            
-            app.state.task_progress["current"] = i + 1
+            try:
+                # Detect split from source path
+                parts = img_src.parts
+                split_name = "train" # Default
+                
+                if "train" in parts: split_name = "train"
+                elif "valid" in parts: split_name = "valid"
+                elif "val" in parts: split_name = "valid"
+                elif "test" in parts: split_name = "test"
+                else: 
+                     # Flat structure -> train
+                     split_name = "train"
+                
+                preserved_splits.add(split_name)
+                
+                # Output directories
+                out_img_dir = output_dir / split_name / "images"
+                out_lbl_dir = output_dir / split_name / "labels"
+                os.makedirs(out_img_dir, exist_ok=True)
+                os.makedirs(out_lbl_dir, exist_ok=True)
 
+                img_name = img_src.name
+                target_name = img_name
+                
+                # Conflict handling: prepend dataset index if collision
+                # Key must be per-split
+                key = f"{split_name}_{img_name}"
+                
+                if key in name_counts:
+                     target_name = f"d{dataset_idx}_{img_name}"
+                # Update collision tracking
+                name_counts[key] = True
+                # Actually we should track target names to ensure uniqueness
+                # Simpler: if file exists in target? No, standard collision logic
+                # Just stick to appending d{idx} if collision logic from before, 
+                # but "name_counts" logic was a bit weird in original code (just checked existence in dict then set True)
+                # It didn't actually check if *target* name existed, just if *source* name appeared before.
+                
+                # Let's improve collision handling
+                # We need to ensure target_name is unique in output dir
+                while (out_img_dir / target_name).exists():
+                     target_name = f"d{dataset_idx}_{target_name}"
+                
+                # Copy image
+                shutil.copy2(img_src, out_img_dir / target_name)
+                
+                # Remap labels
+                mapping = class_mappings[dataset_idx]
+                remapped_lines = []
+                with open(label_src, 'r') as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if parts:
+                            local_cls = int(parts[0])
+                            global_cls = mapping.get(local_cls, local_cls)
+                            parts[0] = str(global_cls)
+                            remapped_lines.append(" ".join(parts) + "\n")
+                
+                with open(out_lbl_dir / f"{Path(target_name).stem}.txt", 'w') as f:
+                    f.writelines(remapped_lines)
+                
+                processed_count += 1
+                app.state.task_progress["current"] = i + 1
+            except Exception as e:
+                print(f"Error merging {img_src}: {e}")
+                
         # 4. Create data.yaml
         new_yaml = {
-            'train': './images', # Simplified output structure
-            'val': './images',
+            'path': str(output_dir.absolute()),
             'nc': len(all_class_names),
             'names': all_class_names
         }
+        
+        # Populate splits
+        for split in preserved_splits:
+             key = 'val' if split == 'valid' else split
+             new_yaml[key] = f"{split}/images"
+             
+        # Defaults
+        if 'train' not in new_yaml: new_yaml['train'] = 'train/images'
+        if 'val' not in new_yaml: new_yaml['val'] = 'valid/images'
+            
         with open(output_dir / "data.yaml", 'w') as f:
             yaml.dump(new_yaml, f)
 
@@ -1117,9 +1166,8 @@ def run_extract_task(request: ExtractRequest):
         app.state.task_progress["message"] = f"Found {len(file_pairs)} images to scan..."
 
         # 3. Process
-        os.makedirs(out_path / "images", exist_ok=True)
-        os.makedirs(out_path / "labels", exist_ok=True)
         
+        created_splits = set()
         extracted_count = 0
         name_counts = {}
         
@@ -1135,17 +1183,51 @@ def run_extract_task(request: ExtractRequest):
                             break
             
             if match:
+                # Detect split from path
+                # Heuristic: check if "train", "valid", "test", "val" is in the parent parts
+                # or strictly check known split names
+                
+                # Default to "train" if purely flat, but if flat we might want to keep it flat?
+                # Actually, if we are extracting to a new dataset, it's safer to standardize on train/val/test if possible,
+                # OR just keep flat if input is flat.
+                
+                # Let's try to detect current split
+                parts = img_src.parts
+                split_name = "train" # Default
+                
+                if "train" in parts: split_name = "train"
+                elif "valid" in parts: split_name = "valid"
+                elif "val" in parts: split_name = "valid"
+                elif "test" in parts: split_name = "test"
+                else: 
+                     # If flat, maybe everything goes to "train"?
+                     # Or stick to flat structure?
+                     # Existing code outputted flat "images"/"labels".
+                     # If we always output "train/images", then we change behavior for flat datasets.
+                     # But split datasets MUST have splits.
+                     # Let's check if we detected any split structure in the SOURCE scan?
+                     pass
+                     
+                created_splits.add(split_name)
+
+                # Output dirs
+                out_img_dir = out_path / split_name / "images"
+                out_lbl_dir = out_path / split_name / "labels"
+                os.makedirs(out_img_dir, exist_ok=True)
+                os.makedirs(out_lbl_dir, exist_ok=True)
+                
                 img_name = img_src.name
                 target_img_name = img_name
-                # Basic collision handling (different splits might have same name)
-                if img_name in name_counts:
-                     name_counts[img_name] += 1
-                     target_img_name = f"{img_src.stem}_{name_counts[img_name]}{img_src.suffix}"
-                else:
-                    name_counts[img_name] = 0
                 
-                shutil.copy2(img_src, out_path / "images" / target_img_name)
-                shutil.copy2(lbl_src, out_path / "labels" / f"{Path(target_img_name).stem}.txt")
+                key = f"{split_name}_{img_name}"
+                if key in name_counts:
+                     name_counts[key] += 1
+                     target_img_name = f"{img_src.stem}_{name_counts[key]}{img_src.suffix}"
+                else:
+                    name_counts[key] = 0
+                
+                shutil.copy2(img_src, out_img_dir / target_img_name)
+                shutil.copy2(lbl_src, out_lbl_dir / f"{Path(target_img_name).stem}.txt")
                 extracted_count += 1
             
             app.state.task_progress["current"] = i + 1
@@ -1153,15 +1235,22 @@ def run_extract_task(request: ExtractRequest):
                 app.state.task_progress["message"] = f"Processed {i+1}/{len(file_pairs)}... Extracted: {extracted_count}"
 
         # 4. Create new data.yaml
-        # For simplicity, keep all original names or just selected? 
-        # Usually it's better to keep indices the same if we copy the label files without editing.
-        # But here we copy FULL labels, so names must match original NC.
         new_yaml = {
-            'train': './images',
-            'val': './images',
+            'path': str(out_path.absolute()),
             'nc': len(all_names),
             'names': all_names
         }
+        
+        # Populate splits in yaml
+        for split in created_splits:
+            # Map 'valid' to 'val' in yaml keys
+            key = 'val' if split == 'valid' else split
+            new_yaml[key] = f"{split}/images"
+            
+        # Ensure minimal keys
+        if 'train' not in new_yaml: new_yaml['train'] = 'train/images'
+        if 'val' not in new_yaml: new_yaml['val'] = 'valid/images'
+        
         with open(out_path / "data.yaml", 'w') as f:
             yaml.dump(new_yaml, f)
 
