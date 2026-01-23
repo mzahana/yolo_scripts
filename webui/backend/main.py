@@ -225,12 +225,48 @@ def load_project_config(dataset_path: Path) -> dict:
     
     merged_data = {}
     
-    # 1. Try legacy generic name (lowest priority)
+    # 0. Try standard project config (Primary)
+    # Check in resolved root AND in the dataset_path itself (in case get_config_identity went up too far)
+    # AND check in dataset_path / identity (nested structure case)
+    potential_paths = [
+        root / "project_config.json",
+        dataset_path / "project_config.json",
+        dataset_path / identity / "project_config.json"
+    ]
+    
+    standard_conf = None
+    standard_conf_root = None
+    for p in potential_paths:
+        if p.exists():
+            standard_conf = p
+            standard_conf_root = p.parent
+            break
+            
+    if standard_conf:
+        try:
+            with open(standard_conf, 'r') as f:
+                merged_data.update(json.load(f))
+                if standard_conf_root:
+                    merged_data["_project_root"] = str(standard_conf_root.absolute())
+        except Exception as e:
+            print(f"Error loading project_config.json: {e}")
+
+    # 1. Try legacy generic name (Secondary)
     legacy_path = root / "yolo_project_config.json"
     if legacy_path.exists():
         try:
             with open(legacy_path, 'r') as f:
-                merged_data.update(json.load(f))
+                # Merge, but prioritize standard if keys conflict? 
+                # Actually, standard should likely override legacy.
+                # So we load legacy first? Or update with legacy?
+                # Let's assume standard is source of truth.
+                # If we want standard to win, we should have loaded legacy first.
+                # But typically legacy is old. 
+                # Let's load legacy data into a temp dict and update with existing merged_data
+                legacy_data = json.load(f)
+                # We want merged_data (standard) to overwrite legacy_data
+                legacy_data.update(merged_data)
+                merged_data = legacy_data
         except: pass
 
     # 2. Find all files matching the identity prefix
@@ -239,7 +275,7 @@ def load_project_config(dataset_path: Path) -> dict:
     # Sort by modification time to preserve most recent updates during merge
     config_files.sort(key=lambda x: x.stat().st_mtime)
     
-    if not config_files and not legacy_path.exists():
+    if not config_files and not legacy_path.exists() and not standard_conf:
         return {}
 
     for cp in config_files:
@@ -248,7 +284,7 @@ def load_project_config(dataset_path: Path) -> dict:
                 merged_data.update(json.load(f))
         except: pass
         
-    print(f"DEBUG: Loaded unified config for {identity} from {len(config_files)} files")
+    print(f"DEBUG: Loaded unified config for {identity} from {len(config_files) + (1 if standard_conf else 0)} files")
     return merged_data
 
 def discover_data_yaml(start_path: Path) -> Optional[Path]:
@@ -420,9 +456,31 @@ def get_dataset_status(path: str):
     
     print(f"Checking status for: {p}")
     dataset_name = p.name
-    # Check for processed folder
-    processed_dir = p.parent / f"{dataset_name}_processed"
-    has_processed = processed_dir.exists() and processed_dir.is_dir()
+    
+    # 0. Load Project Config First
+    config = load_project_config(p)
+    
+    # Check for processed folder using config or default
+    processed_dir = None
+    if config and config.get("dirs", {}).get("processed"):
+        # Resolve relative to project root
+        if config.get("_project_root"):
+             root = Path(config["_project_root"])
+        else:
+             # Fallback
+             root, _ = get_config_identity(p)
+             
+        potential_proc = root / config["dirs"]["processed"]
+        if potential_proc.exists():
+            processed_dir = potential_proc
+    
+    if not processed_dir:
+        # Legacy check
+        processed_dir = p.parent / f"{dataset_name}_processed"
+        if not processed_dir.exists():
+            processed_dir = None
+            
+    has_processed = processed_dir is not None
     
     # Priority: prefixed folder > legacy non-prefixed folder
     # NEW: Robust discovery using glob to find folders starting with dataset_name and ending with suffixes
@@ -437,17 +495,17 @@ def get_dataset_status(path: str):
     # 2. Add legacy and explicit paths
     labeled_dirs = candidates + [
         p.parent / f"{dataset_name}_masked_images",
-        processed_dir / f"{dataset_name}_masked_images",
+        processed_dir / f"{dataset_name}_masked_images" if processed_dir else p, # dummy fallback
         p / f"{dataset_name}_masked_images",
         p.parent / f"{dataset_name}_labeled",
-        processed_dir / f"{dataset_name}_labeled",
+        processed_dir / f"{dataset_name}_labeled" if processed_dir else p,
         p / f"{dataset_name}_labeled",
         # Legacy non-prefixed versions
         p.parent / "masked_images",
-        processed_dir / "masked_images",
+        processed_dir / "masked_images" if processed_dir else p,
         p / "masked_images",
         p.parent / "labeled",
-        processed_dir / "labeled",
+        processed_dir / "labeled" if processed_dir else p,
         p / "labeled"
     ]
     
@@ -483,22 +541,36 @@ def get_dataset_status(path: str):
     # Also check specifically for labels directory to suggest mask generation
     labels_root = None
     
-    # NEW: Try to find labels in the robustly discovered candidate directories first
-    for ld in labeled_dirs:
-        # If ld is literally a labels folder
-        if ld.name == "labels" and ld.is_dir():
-            labels_root = str(ld.absolute())
-            break
-        # If it's a labeled root, check common subfolders
-        for sub in ["labels", "labels/train", "labels/val", "labeled/labels"]:
-            sub_p = ld / sub
-            if sub_p.exists() and sub_p.is_dir():
-                labels_root = str(sub_p.absolute())
-                break
-        if labels_root:
-            break
+    # A. Check Config for Labels
+    if config and config.get("dirs", {}).get("annotations"):
+        # Assuming relative to project root
+        if config.get("_project_root"):
+             root = Path(config["_project_root"])
+        else:
+             root, _ = get_config_identity(p)
+             
+        p_ann = root / config["dirs"]["annotations"]
+        if p_ann.exists():
+            labels_root = str(p_ann.absolute())
 
-    # Fallback to current/parent if not found in candidates
+    # B. If not in config, try robustness
+    if not labels_root:
+        # NEW: Try to find labels in the robustly discovered candidate directories first
+        for ld in labeled_dirs:
+            # If ld is literally a labels folder
+            if ld.name == "labels" and ld.is_dir():
+                labels_root = str(ld.absolute())
+                break
+            # If it's a labeled root, check common subfolders
+            for sub in ["labels", "labels/train", "labels/val", "labeled/labels"]:
+                sub_p = ld / sub
+                if sub_p.exists() and sub_p.is_dir():
+                    labels_root = str(sub_p.absolute())
+                    break
+            if labels_root:
+                break
+ 
+    # C. Fallback to current/parent if not found in candidates or config
     if not labels_root:
         # Determine identifying prefix by stripping ALL technical suffixes
         p_path = Path(p).absolute()
@@ -508,7 +580,8 @@ def get_dataset_status(path: str):
         curr = p_path
         for _ in range(3):
             candidates = [
-                curr / "labels", 
+                curr / "labels",
+                curr / "annotations", # Standard project structure
                 curr / "labeling" / "labels", 
                 curr / "labeled" / "labels",
                 curr / f"{prefix}_labeled" / "labels",
@@ -516,17 +589,36 @@ def get_dataset_status(path: str):
             ]
             for cand in candidates:
                 if cand.exists() and cand.is_dir():
-                    labels_root = str(cand.absolute())
-                    break
+                    # Verify it has txt files or subdirs
+                    if any(cand.glob("*.txt")) or (cand / "labels").exists():
+                        labels_root = str(cand.absolute())
+                        break
             if labels_root or curr.parent == curr:
                 break
             curr = curr.parent
-
-    if labels_root and not found_labeled:
-         found_labeled = str(p.absolute())
-
-    config = load_project_config(p)
+            
+    # CRITICAL: If we have labels but no masked images (found_labeled is None), 
+    # we MUST set found_labeled to something (e.g. the labels root itself, or the dataset path)
+    # so the frontend thinks we have a "labeled directory" and allows mask generation.
+    # The frontend checks `if (!labelResult?.labeled_dir)` to block generation.
+    # We return `labeled_dir` key as `found_labeled`.
     
+    if labels_root and not found_labeled:
+         # Use labels_root as the handle for "labeled directory" if no visual masks exist yet
+         found_labeled = labels_root
+    
+    # Override from config if masked dir is explicitly set
+    if config and config.get("dirs", {}).get("masked"):
+         if config.get("_project_root"):
+             root = Path(config["_project_root"])
+         else:
+             root, _ = get_config_identity(p)
+             
+         p_masked = root / config["dirs"]["masked"]
+         if p_masked.exists() and any(get_supported_image_files(p_masked)):
+             found_labeled = str(p_masked.absolute())
+             has_masks = True
+
     return {
         "processed_dir": str(processed_dir.absolute()) if has_processed else None,
         "labeled_dir": found_labeled,
@@ -641,12 +733,40 @@ def preprocess_dataset(request: PreprocessRequest, background_tasks: BackgroundT
 def run_autolabel_task(request: AutoLabelRequest):
     try:
         app.state.task_progress["status"] = "labeling"
-        app.state.task_progress["message"] = "Loading YOLO model..."
+        app.state.task_progress["message"] = "Initializing..."
         
         img_dir = Path(request.dataset_path)
         # Prepare class names map
         names_list = load_classes_from_path(img_dir)
         class_names_map = {i: n for i, n in enumerate(names_list)} if names_list else None
+
+        # Determine output directories based on Project existence
+        project_config_path = img_dir.parent / "project_config.json"
+        
+        output_labels_dir = None
+        output_masked_dir = None
+        save_labeled_images = True
+        labeled_dir_path = None
+        masked_images_dir = None
+        
+        if project_config_path.exists():
+            print(f"Project config found at {project_config_path}. Using Project structure.")
+            with open(project_config_path, 'r') as f:
+                p_config = json.load(f)
+            
+            # Use Project definitions
+            labeled_dir_path = img_dir.parent / p_config.get("dirs", {}).get("annotations", "annotations")
+            masked_images_dir = img_dir.parent / p_config.get("dirs", {}).get("masked", f"{p_config.get('name')}_masked_images")
+            
+            output_labels_dir = labeled_dir_path
+            output_masked_dir = masked_images_dir
+            save_labeled_images = False
+            
+            # Ensure directories exist
+            labeled_dir_path.mkdir(parents=True, exist_ok=True)
+            masked_images_dir.mkdir(parents=True, exist_ok=True)
+        
+        app.state.task_progress["message"] = "Loading YOLO model..."
 
         inferencer = YOLOInference(
             model_path=request.model_path,
@@ -654,12 +774,11 @@ def run_autolabel_task(request: AutoLabelRequest):
             confidence=request.confidence,
             save_masked_images=request.save_masked,
             single_folder=True,
-            class_names_map=class_names_map
+            class_names_map=class_names_map,
+            output_labels_dir=output_labels_dir,
+            output_masked_dir=output_masked_dir,
+            save_labeled_images=save_labeled_images
         )
-        
-        # We need to monkey patch or modify YOLOInference to report progress
-        # For now, we'll monitor the output directory or just simulate if we can't easily hook into tqdm
-        # Since YOLOInference uses tqdm, we could try to capture it, but simple way is to use its logic here
         
         image_paths = list(inferencer.image_dir_.glob('*.png')) + list(inferencer.image_dir_.glob('*.jpg')) + list(inferencer.image_dir_.glob('*.tif'))
         app.state.task_progress["total"] = len(image_paths)
@@ -677,70 +796,11 @@ def run_autolabel_task(request: AutoLabelRequest):
 
         # data.yaml generation skipped for Project workflow (handled by dataset creation)
         
-        # Determine output directories based on Project existence
-        project_config_path = img_dir.parent / "project_config.json"
-        
         if project_config_path.exists():
-            print(f"Project config found at {project_config_path}. Using Project structure.")
+            # Update Project Config with Model Path (Reloading to be safe)
             with open(project_config_path, 'r') as f:
                 p_config = json.load(f)
-            
-            # Use Project definitions
-            # annotations -> Project/annotations
-            # masked -> Project/[name]_masked_images
-            
-            # Logic: Auto-labeler typically generates labels. In Project structure, these go to 'annotations'
-            # But wait, auto-labeler output is usually a dataset format (images+labels). 
-            # If we just want the labels, we target 'annotations'. 
-            # However, YOLOInference might try to write elsewhere.
-            # Let's direct YOLOInference to write to a temp dir, then move, OR update YOLOInference.
-            # For now, let's stick to the user request: "labels txt files in the annotations folder"
-            
-            labeled_dir_path = img_dir.parent / p_config.get("dirs", {}).get("annotations", "annotations")
-            masked_images_dir = img_dir.parent / p_config.get("dirs", {}).get("masked", f"{p_config.get('name')}_masked_images")
-            
-            # Ensure directories exist
-            labeled_dir_path.mkdir(parents=True, exist_ok=True)
-            masked_images_dir.mkdir(parents=True, exist_ok=True)
-
-            # NOTE: YOLOInference class usually creates its own usage of output dirs.
-            # If YOLOInference doesn't support explicit output dir overridden, we have to move files.
-            # The current YOLOInference implementation (assumed) likely derives output from input.
-            # We might need to MOVE the generated files to the correct project folders.
-            
-            # Let's inspect where inferencer wrote them.
-            # inferencer.masked_images_dir_ is where it wrote masked images.
-            # We should move content of inferencer.masked_images_dir_ to masked_images_dir
-            
-            if request.save_masked and inferencer.masked_images_dir_.exists():
-                for item in inferencer.masked_images_dir_.iterdir():
-                    if item.is_file():
-                        shutil.move(str(item), str(masked_images_dir / item.name))
-                # Cleanup legacy dir
-                shutil.rmtree(inferencer.masked_images_dir_)
                 
-            # Now for labels. YOLOInference likely wrote to parent/[name]_labeled/labels
-            # We want them in 'annotations' (flat txt files or subdir?)
-            # Usually Project/annotations/*.txt
-            # Let's check where they are.
-            legacy_labeled_dir = img_dir.parent / f"{img_dir.name}_labeled"
-            if legacy_labeled_dir.exists():
-                # Check for 'labels' subdir (YOLO format)
-                source_labels = legacy_labeled_dir / "labels"
-                if source_labels.exists():
-                    for item in source_labels.iterdir():
-                        if item.is_file():
-                            shutil.move(str(item), str(labeled_dir_path / item.name))
-                else:
-                     # Maybe flat?
-                     for item in legacy_labeled_dir.iterdir():
-                        if item.is_file() and item.suffix == '.txt':
-                            shutil.move(str(item), str(labeled_dir_path / item.name))
-                
-                # Cleanup legacy dir if we emptied it
-                shutil.rmtree(legacy_labeled_dir)
-            
-            # Update Project Config with Model Path
             p_config["model_path"] = request.model_path
             with open(project_config_path, 'w') as f:
                 json.dump(p_config, f, indent=4)
@@ -758,14 +818,18 @@ def run_autolabel_task(request: AutoLabelRequest):
 
         else:
              # Legacy Fallback
+            config_update = {"model_path": request.model_path}
             save_project_config(Path(request.dataset_path), config_update)
+            
+            # For legacy, inferred dirs might be different if we didn't pass explicit ones (we didn't for this branch)
+            # Default behavior of inferencer applies
             
             app.state.task_progress["status"] = "idle"
             app.state.task_progress["message"] = "Auto-labeling complete!"
             app.state.task_progress["result"] = {
-                "labeled_dir": str(labeled_dir_path.absolute()),
+                "labeled_dir": str(inferencer.labeled_labels_dir_.parent.absolute()) if inferencer.labeled_labels_dir_ else None, # approximate
                 "masked_dir": str(inferencer.masked_images_dir_.absolute()),
-                "yaml_path": str(yaml_path.absolute()),
+                "yaml_path": "", # No yaml path guaranteed
                 "classes": list(inferencer.model_.names.values())
             }
 
@@ -1493,68 +1557,134 @@ def run_mask_generation_task(request: GenerateMaskRequest):
         
         raw_path = Path(request.dataset_path).absolute()
         
-        # Determine labels path if not provided
+        # 1. FIND PROJECT CONFIG
+        # Traverse up to find project_config.json or deduce identity
+        project_conf = None
+        curr = raw_path
+        root = None
+        project_name = None
+        
+        for _ in range(4):
+            if (curr / "project_config.json").exists():
+                project_conf = curr / "project_config.json"
+                root = curr
+                break
+            if curr.parent == curr: break
+            curr = curr.parent
+            
+        # Fallback root determination
+        if not root:
+             root, identity = get_config_identity(raw_path)
+             project_name = identity
+        
+        # Read config if found
+        dirs_config = {}
+        if project_conf:
+             try:
+                 with open(project_conf, 'r') as f:
+                     pc = json.load(f)
+                     project_name = pc.get("name", root.name)
+                     dirs_config = pc.get("dirs", {})
+             except:
+                 project_name = root.name
+
+        if not project_name: project_name = "project"
+
+
+        # 2. DETERMINE LABELS PATH
         labels_path = None
+        
+        # User override?
         if request.labels_path:
             labels_path = Path(request.labels_path).absolute()
-        else:
-            # Try to find labels sibling or inside
-            potential = [raw_path.parent / "labels", raw_path / "labels"]
-            for p in potential:
-                if p.exists():
-                    labels_path = p
-                    break
         
+        # Config?
+        if not labels_path and "annotations" in dirs_config:
+            labels_path = root / dirs_config["annotations"]
+            
+        # Common locations
         if not labels_path:
-             raise ValueError("Could not find labels directory automatically. Please provide it.")
+            candidates = [
+                root / "annotations",
+                root / f"{project_name}_annotations",
+                root / "labels",
+                raw_path / "labels",
+                raw_path.parent / "labels"
+            ]
+            for c in candidates:
+                if c.exists() and (any(c.glob("*.txt")) or (c/"labels").exists()):
+                   labels_path = c
+                   break
 
-        # Heuristic: if labels_path doesn't contain .txt files directly, but has a 'labels' subfolder, use that
-        if not any(labels_path.glob("*.txt")):
-            if (labels_path / "labels").exists():
-                labels_path = labels_path / "labels"
-            elif (labels_path.parent / "labels").exists():
-                labels_path = labels_path.parent / "labels"
+        if not labels_path or not labels_path.exists():
+             raise ValueError(f"Could not find labels directory. Searched in common locations within {root}")
 
-        # Determine which images to use as base
-        # If labels_path is .../labeled/labels, check if .../labeled/images exists
-        img_src_path = raw_path
-        if labels_path.name == "labels":
-            potential_imgs = labels_path.parent / "images"
-            if potential_imgs.exists() and any(get_supported_image_files(potential_imgs)):
-                img_src_path = potential_imgs
-                print(f"DEBUG: Found processed images in {img_src_path}, using as base for masks.")
+        # Handle 'labels' subdirectory structure
+        # If labels_path is a root like 'labeled' or 'annotations', check inside
+        if (labels_path / "labels").exists():
+            labels_path = labels_path / "labels"
+            
+        # 3. DETERMINE IMAGE SOURCE
+        # Where are the images we want to mask?
+        # Usually 'processed' or 'dataset/images'
+        
+        img_src_path = None
+        
+        # Config?
+        if "processed" in dirs_config:
+             potential = root / dirs_config["processed"]
+             if potential.exists(): img_src_path = potential
+             
+        # Deduced?
+        if not img_src_path:
+            # If current raw_path has images, use it (unless it IS the output dir we are trying to fill)
+            # Check if raw_path is likely the output dir (e.g. ends with _masked_images)
+            is_output_target = raw_path.name.endswith("_masked_images")
+            
+            if not is_output_target and any(get_supported_image_files(raw_path)):
+                img_src_path = raw_path
+            else:
+                # Look for siblings
+                candidates = [
+                    root / f"{project_name}_processed",
+                    root / f"{project_name}_processed_images",
+                    root / "processed",
+                    root / "images",
+                    root / f"{project_name}_images"
+                ]
+                for c in candidates:
+                    if c.exists() and any(get_supported_image_files(c)):
+                        img_src_path = c
+                        break
+        
+        if not img_src_path or not img_src_path.exists():
+             raise ValueError(f"Could not find source images (processed or raw). Searched common locations.")
 
-        # Determine output path
+        print(f"DEBUG: Mask Gen - Source: {img_src_path}, Labels: {labels_path}")
+
+        # 4. DETERMINE OUTPUT PATH
         out_path = None
         if request.output_path:
             out_path = Path(request.output_path).absolute()
+        elif "masked" in dirs_config:
+            out_path = root / dirs_config["masked"]
         else:
-            # Smart determination of output directory to match auto_labeler logic
-            # We want [DatasetIdentity]_masked_images
-            
-            # If our source is inside a structure like /foo_labeled/images, we want /foo_masked_images
-            if img_src_path.name == "images" and img_src_path.parent.name.endswith("_labeled"):
-                # Strip _labeled from parent
-                base_name = img_src_path.parent.name.replace("_labeled", "")
-                out_path = img_src_path.parent.parent / f"{base_name}_masked_images"
+            # Logic: [Project]_masked_images
+            if raw_path.name.endswith("_masked_images"):
+                out_path = raw_path # Overwrite/Fill current
             else:
-                 # Flat structure or unknown
-                 # If img_src_path is "rgb_processed", we want "rgb_processed_masked_images"
-                 out_path = img_src_path.parent / f"{img_src_path.name}_masked_images"
+                out_path = root / f"{project_name}_masked_images"
             
         os.makedirs(out_path, exist_ok=True)
 
         # Load class names
         class_names = {}
-        yaml_path = discover_data_yaml(raw_path)
-        if yaml_path and yaml_path.exists():
-            with open(yaml_path, 'r') as f:
-                data = yaml.safe_load(f)
-                names = data.get('names', [])
-                if isinstance(names, list):
-                    class_names = {i: n for i, n in enumerate(names)}
-                elif isinstance(names, dict):
-                    class_names = {int(k): v for k, v in names.items()}
+        # Try both root and dataset for yaml/config
+        names_list = load_classes_from_path(img_src_path)
+        if not names_list: names_list = load_classes_from_path(root)
+        
+        if names_list:
+             class_names = {i: n for i, n in enumerate(names_list)}
 
         image_files = get_supported_image_files(img_src_path)
         app.state.task_progress["total"] = len(image_files)
@@ -1564,6 +1694,8 @@ def run_mask_generation_task(request: GenerateMaskRequest):
         for i, img_p in enumerate(image_files):
             lbl_p = labels_path / f"{img_p.stem}.txt"
             
+            # Try to handle flat vs subdir labels if needed (though we resolved labels_path to be the dir containing txts)
+            
             if draw_single_mask(img_p, lbl_p, out_path, class_names):
                 saved_count += 1
             
@@ -1572,7 +1704,7 @@ def run_mask_generation_task(request: GenerateMaskRequest):
                 app.state.task_progress["message"] = f"Processed {i+1}/{len(image_files)} images... Saved: {saved_count}"
 
         if saved_count == 0:
-             raise ValueError(f"No corresponding label files found in {labels_path}. Verified {len(image_files)} images.")
+             raise ValueError(f"No corresponding label files found in {labels_path}. Verified {len(image_files)} images from {img_src_path}.")
 
         app.state.task_progress["status"] = "idle"
         app.state.task_progress["message"] = f"Mask generation complete! Saved {saved_count} images to {out_path}"
@@ -1581,9 +1713,6 @@ def run_mask_generation_task(request: GenerateMaskRequest):
             "labeled_dir": str(labels_path.parent.absolute() if labels_path.name == "labels" else labels_path.absolute())
         }
         
-        # Update config if possible
-        save_project_config(raw_path, {"masked_dir": str(out_path)})
-
     except Exception as e:
         app.state.task_progress["status"] = "error"
         app.state.task_progress["message"] = f"Mask Gen Error: {str(e)}"

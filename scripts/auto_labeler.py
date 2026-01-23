@@ -45,7 +45,7 @@ import cv2
 import numpy as np
 
 class YOLOInference:
-    def __init__(self, model_path, image_dir, confidence=0.5, save_masked_images=False, epsilon=0.01, resize_height=None, resize_width=None, single_folder=False, class_names_map=None):
+    def __init__(self, model_path, image_dir, confidence=0.5, save_masked_images=False, epsilon=0.01, resize_height=None, resize_width=None, single_folder=False, class_names_map=None, output_labels_dir=None, output_masked_dir=None, save_labeled_images=True):
         self.model_path_ = model_path
         self.image_dir_ = Path(image_dir)
         self.confidence_ = confidence
@@ -54,6 +54,7 @@ class YOLOInference:
         self.resize_height_ = resize_height
         self.resize_width_ = resize_width
         self.single_folder_ = single_folder
+        self.save_labeled_images_ = save_labeled_images
         self.specific_images_ = None  # List of specific filenames to process
 
         # Define parent directory and output directories for images and labels
@@ -62,24 +63,43 @@ class YOLOInference:
         
         if self.single_folder_:
             # Single folder structure
-            self.labeled_images_dir_ = self.parent_dir_ / f"{dataset_name}_labeled/images"
-            self.labeled_labels_dir_ = self.parent_dir_ / f"{dataset_name}_labeled/labels"
-            self.masked_images_dir_ = self.parent_dir_ / f"{dataset_name}_masked_images"
+            if save_labeled_images:
+                self.labeled_images_dir_ = self.parent_dir_ / f"{dataset_name}_labeled/images"
+                self.labeled_images_dir_.mkdir(parents=True, exist_ok=True)
+            else:
+                 self.labeled_images_dir_ = None
+
+            if output_labels_dir:
+                self.labeled_labels_dir_ = Path(output_labels_dir)
+            else:
+                self.labeled_labels_dir_ = self.parent_dir_ / f"{dataset_name}_labeled/labels"
+            self.labeled_labels_dir_.mkdir(parents=True, exist_ok=True)
+
+            if output_masked_dir:
+                self.masked_images_dir_ = Path(output_masked_dir)
+            else:
+                self.masked_images_dir_ = self.parent_dir_ / f"{dataset_name}_masked_images"
+            if self.save_masked_images_:
+                self.masked_images_dir_.mkdir(parents=True, exist_ok=True)
             
-            # Ensure output directories exist
-            for dir in [self.labeled_images_dir_, self.labeled_labels_dir_, self.masked_images_dir_]:
-                dir.mkdir(parents=True, exist_ok=True)
         else:
             # Separate folders by class
+            # Note: Custom output dirs not fully implemented for bundle/single split mode yet as per current requirements
             self.bundle_images_dir_ = self.parent_dir_ / f"{dataset_name}_bundles/images"
             self.bundle_labels_dir_ = self.parent_dir_ / f"{dataset_name}_bundles/labels"
             self.single_images_dir_ = self.parent_dir_ / f"{dataset_name}_single/images"
             self.single_labels_dir_ = self.parent_dir_ / f"{dataset_name}_single/labels"
-            self.masked_images_dir_ = self.parent_dir_ / f"{dataset_name}_masked_images"
+            
+            if output_masked_dir:
+                self.masked_images_dir_ = Path(output_masked_dir)
+            else:
+                self.masked_images_dir_ = self.parent_dir_ / f"{dataset_name}_masked_images"
             
             # Ensure all output directories exist
-            for dir in [self.bundle_images_dir_, self.bundle_labels_dir_, self.single_images_dir_, self.single_labels_dir_, self.masked_images_dir_]:
+            for dir in [self.bundle_images_dir_, self.bundle_labels_dir_, self.single_images_dir_, self.single_labels_dir_]:
                 dir.mkdir(parents=True, exist_ok=True)
+            if self.save_masked_images_:
+                self.masked_images_dir_.mkdir(parents=True, exist_ok=True)
         
         # Define class names mapping
         if class_names_map:
@@ -301,7 +321,11 @@ class YOLOInference:
             # Save image and label based on the mode
             if self.single_folder_:
                 # Save all in single folder
-                image_save_path = self.labeled_images_dir_ / (img_file.stem + ".jpg")
+                if self.labeled_images_dir_:
+                    image_save_path = self.labeled_images_dir_ / (img_file.stem + ".jpg")
+                else:
+                    image_save_path = None
+                    
                 with open(self.labeled_labels_dir_ / label_file_path.name, 'w') as f:
                     f.write(label_file_content)
                 labeled_count += 1
@@ -319,7 +343,8 @@ class YOLOInference:
                         f.write(label_file_content)
 
             # Save the image as .jpg
-            cv2.imwrite(str(image_save_path), img)
+            if image_save_path:
+                cv2.imwrite(str(image_save_path), img)
 
             # Optionally save the masked image or with bounding boxes
             if self.save_masked_images_:

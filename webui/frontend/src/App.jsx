@@ -921,18 +921,40 @@ function App() {
             showNotification('Please load a dataset first.');
             return;
         }
-        if (!labelResult?.labeled_dir) {
+
+        // Determine labels path: Priority to active labelResult, fallback to project config
+        let labelsPath = labelResult?.labeled_dir;
+
+        if (!labelsPath && projectPaths?.annotations) {
+            labelsPath = projectPaths.annotations;
+        }
+
+        if (!labelsPath) {
             showNotification('No labeled directory found. Please run auto-labeling first.');
             return;
         }
+
         setIsTaskRunning(true);
         setTaskProgress({ status: 'generating_masks', message: 'Starting mask generation...', current: 0, total: 100 });
         try {
             const res = await axios.post(`${API_BASE}/generate_masked`, {
                 dataset_path: datasetPath,
-                labels_path: labelResult.labeled_dir
+                labels_path: labelsPath
             });
             showNotification('Mask generation started...');
+
+            // If simple state update, set it
+            if (!labelResult) {
+                setLabelResult({
+                    labeled_dir: labelsPath,
+                    masked_dir: '', // Unknown yet
+                    classes: [],
+                    yaml_path: 'Project Config'
+                });
+                // Also ensure buttons show up by setting flags
+                setHasLabels(true);
+            }
+
         } catch (err) {
             showNotification('Failed to start mask generation: ' + (err.response?.data?.detail || err.message));
             setIsTaskRunning(false);
