@@ -25,6 +25,7 @@ const AnnotationTool = ({ datasetPath, onPathChange, samModelPath, setSamModelPa
     const [imageObj, setImageObj] = useState(null);
     const [scale, setScale] = useState(1);
     const [hoveredIndex, setHoveredIndex] = useState(null);
+    const [imageSearchQuery, setImageSearchQuery] = useState('');
 
     // Fetch initial data
     useEffect(() => {
@@ -500,6 +501,22 @@ const AnnotationTool = ({ datasetPath, onPathChange, samModelPath, setSamModelPa
 
                     {/* Sidebar */}
                     <div className="glass" style={{ width: '300px', borderRadius: '12px', padding: '20px', display: 'flex', flexDirection: 'column' }}>
+                        <div style={{ marginBottom: '10px', display: 'flex', gap: '10px', alignItems: 'center' }}>
+                            <input
+                                type="text"
+                                className="input"
+                                placeholder="Go to image..."
+                                value={imageSearchQuery}
+                                onChange={(e) => {
+                                    setImageSearchQuery(e.target.value);
+                                    if (e.target.value) {
+                                        const idx = images.findIndex(img => img.name.toLowerCase().includes(e.target.value.toLowerCase()));
+                                        if (idx >= 0) setCurrentIndex(idx);
+                                    }
+                                }}
+                                style={{ flex: 1, padding: '5px' }}
+                            />
+                        </div>
                         <div style={{ marginBottom: '20px', display: 'flex', gap: '10px', alignItems: 'center' }}>
                             <button className="btn" onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))} disabled={currentIndex === 0}>⬅️</button>
                             <span style={{ fontSize: '0.9rem', flex: 1, textAlign: 'center' }}>

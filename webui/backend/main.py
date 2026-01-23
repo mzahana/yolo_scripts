@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 from pathlib import Path
 import yaml
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, Any
 import sys
 import threading
 import shutil
@@ -134,6 +134,10 @@ class CreateDatasetRequest(BaseModel):
     project_path: str
     name: str # Dataset name
     strategy: str = "all"
+
+class UpdateConfigRequest(BaseModel):
+    path: str
+    updates: Dict[str, Any]
 
 
 
@@ -434,7 +438,15 @@ def list_datasets(project_path: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/project/config")
+def update_project_config(request: UpdateConfigRequest):
+    try:
+        return ProjectManager.update_project_config(request.path, request.updates)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/dataset/info")
 def get_dataset_info(request: DatasetInfo):

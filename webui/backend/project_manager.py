@@ -11,7 +11,10 @@ class ProjectConfig(BaseModel):
     name: str
     created_at: str
     description: str = ""
+    description: str = ""
     classes: List[str] = []
+    sam_model_path: Optional[str] = None
+    model_path: Optional[str] = None # For YOLO model
     
     # Paths relative to project root
     dirs: Dict[str, str] = {
@@ -47,19 +50,18 @@ class ProjectManager:
             "labeled": project_root / f"{name}_datasets"
         }
         
-        for d in dirs.values():
+        for k, d in dirs.items():
+            if k == "raw": continue
             d.mkdir(parents=True, exist_ok=True)
             
-        # Copy raw images (Scanning and Copying)
-        # Note: In a real scenario with huge datasets, we might want to symlink or just reference.
-        # But the request implies the folder structure is self-contained.
-        # "subfolder with the raw images"
-        # We will copy for now to be safe and self-contained as requested.
+        # Move raw images folder instead of copying (Efficiency)
         source_path = Path(raw_images_source)
+        target_path = dirs["raw"]
+        
         if source_path.exists() and source_path.is_dir():
-             for item in source_path.iterdir():
-                if item.is_file() and item.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp']:
-                    shutil.copy2(item, dirs["raw"] / item.name)
+             shutil.move(str(source_path), str(target_path))
+        else:
+             target_path.mkdir(parents=True, exist_ok=True)
 
         # Create classes.txt
         with open(project_root / ProjectManager.CLASSES_FILENAME, 'w') as f:
@@ -115,9 +117,36 @@ class ProjectManager:
             "config": config_data,
             "paths": abs_dirs
         }
+        return {
+            "path": str(root),
+            "config": config_data,
+            "paths": abs_dirs
+        }
 
     @staticmethod
-    def create_dataset(project_path: str, dataset_name: str, strategy: str = "all", split_ratios: List[float] = [0.7, 0.2, 0.1]) -> Dict:
+    def update_project_config(project_path: str, updates: Dict) -> Dict:
+        """
+        Updates the project configuration.
+        """
+        root = Path(project_path)
+        config_path = root / ProjectManager.CONFIG_FILENAME
+        
+        if not config_path.exists():
+             raise FileNotFoundError(f"Config not found at {config_path}")
+             
+        with open(config_path, 'r') as f:
+            config_data = json.load(f)
+            
+        # Update allowed fields
+        for k, v in updates.items():
+            if k in ['sam_model_path', 'model_path', 'classes', 'description']:
+                config_data[k] = v
+                
+        # Save back
+        with open(config_path, 'w') as f:
+            json.dump(config_data, f, indent=4)
+            
+        return config_data
         """
         Creates a YOLO dataset from processed images and annotations.
         strategy: 'all' (copy all found pairs), 'random' (not implemented yet, defaults to all)

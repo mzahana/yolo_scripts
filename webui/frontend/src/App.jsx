@@ -59,6 +59,7 @@ function App() {
 
     // Cache buster for images
     const [cacheBuster, setCacheBuster] = useState(Date.now());
+    const [verificationScroll, setVerificationScroll] = useState(0);
 
     // Navigation State
     const [activeTab, setActiveTab] = useState('project_home');
@@ -198,10 +199,12 @@ function App() {
     const handleCreateProject = async (data) => {
         try {
             const res = await axios.post(`${API_BASE}/project/create`, data);
-            handleLoadProject(res.data.path);
+            showNotification('Project created successfully!');
+            await handleLoadProject(res.data.path);
         } catch (err) {
             console.error(err);
             alert("Error creating project: " + (err.response?.data?.detail || err.message));
+            throw err;
         }
     };
 
@@ -222,6 +225,33 @@ function App() {
             alert("Error loading project: " + (err.response?.data?.detail || err.message));
         }
     };
+
+    const saveProjectConfig = async (updates) => {
+        if (!datasetPath) return;
+        try {
+            await axios.post(`${API_BASE}/project/config`, {
+                path: datasetPath,
+                updates: updates
+            });
+            // Update local config state partially to avoid reload
+            setProjectConfig(prev => ({ ...prev, ...updates }));
+        } catch (err) {
+            console.error("Failed to save config:", err);
+        }
+    };
+
+    // Auto-save SAM model path when it changes (debounced)
+    useEffect(() => {
+        if (!projectConfig || !samModelPath) return;
+        if (samModelPath === projectConfig.sam_model_path) return;
+
+        const timer = setTimeout(() => {
+            console.log("Auto-saving SAM model path...");
+            saveProjectConfig({ sam_model_path: samModelPath });
+        }, 1000);
+
+        return () => clearTimeout(timer);
+    }, [samModelPath, projectConfig]);
 
     // Auto-predict annotation path when dataset path changes
     useEffect(() => {
@@ -296,7 +326,10 @@ function App() {
         if (activeTab === 'verification') {
             // Data Inspection: Load masked images from project
             if (projectPaths.masked) {
-                handleLoadMaskedImages(projectPaths.masked);
+                // Fix: Only load if path changed or empty (Prevent Reset)
+                if (projectPaths.masked !== maskedPath || maskedImages.length === 0) {
+                    handleLoadMaskedImages(projectPaths.masked);
+                }
             }
         }
 
@@ -333,6 +366,10 @@ function App() {
             if (mPath) {
                 setModelPath(mPath);
             }
+            // Load SAM model
+            if (projectConfig.sam_model_path) {
+                setSamModelPath(projectConfig.sam_model_path);
+            }
         }
     }, [projectConfig]);
 
@@ -367,10 +404,14 @@ function App() {
         }
     };
 
-    const handleLoadMore = () => {
+    const handlePageChange = (newOffset) => {
         const path = maskedPath || labelResult?.masked_dir;
         if (path) {
-            handleLoadMaskedImages(path, maskedOffset + MASKED_LIMIT, true);
+            handleLoadMaskedImages(path, newOffset, false);
+            // Reset scroll to top when changing pages
+            setVerificationScroll(0);
+            const scrollContainer = document.querySelector('.main-content');
+            if (scrollContainer) scrollContainer.scrollTop = 0;
         }
     };
 
@@ -1149,6 +1190,29 @@ function App() {
         // Use labels classes if available
         const classes = availableClasses.length > 0 ? availableClasses : (datasetStats?.class_stats?.map(s => s.name) || []);
 
+        // Restore scroll position
+        React.useLayoutEffect(() => {
+            const scrollContainer = document.querySelector('.main-content'); // Assuming main-content is the scrollable area
+            if (scrollContainer && verificationScroll > 0) {
+                scrollContainer.scrollTop = verificationScroll;
+            }
+
+            // Save scroll on unmount/change
+            return () => {
+                if (scrollContainer) {
+                    setVerificationScroll(scrollContainer.scrollTop);
+                }
+            };
+        }, []);
+
+        // Also listen to scroll to update state periodically if needed, but unmount is safer for exact restore
+        // However, if we switch tabs, unmount triggers.
+        // We need to capture the scroll of `.main-content` or whatever executes the overflow.
+        // In this App structure, `.main-content` seems to be the main scrollable area? 
+        // Or is it `section-card`?
+        // Looking at css, usually main-content or container.
+        // Let's attach a scroll listener to update the state ref or debit.
+
         return (
             <div>
                 {/* Filter UI */}
@@ -1192,7 +1256,7 @@ function App() {
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                             <div style={{ fontSize: '0.8rem', opacity: 0.6 }}>
-                                Showing {maskedImages.length} of {totalMasked} images
+                                Showing {maskedOffset + 1}-{Math.min(maskedOffset + maskedImages.length, totalMasked)} of {totalMasked}
                             </div>
                             <button
                                 className="btn btn-secondary"
@@ -1334,10 +1398,26 @@ function App() {
                             ))}
                         </div>
                         {
-                            maskedImages.length < totalMasked && (
-                                <div style={{ marginTop: '40px', textAlign: 'center' }}>
-                                    <button className="btn btn-primary" onClick={handleLoadMore}>
-                                        Load More ({totalMasked - maskedImages.length} remaining)
+                            totalMasked > MASKED_LIMIT && (
+                                <div style={{ marginTop: '40px', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '20px' }}>
+                                    <button
+                                        className="btn"
+                                        disabled={maskedOffset === 0}
+                                        onClick={() => handlePageChange(maskedOffset - MASKED_LIMIT)}
+                                    >
+                                        ← Previous
+                                    </button>
+
+                                    <span style={{ opacity: 0.7 }}>
+                                        Page {Math.floor(maskedOffset / MASKED_LIMIT) + 1} of {Math.ceil(totalMasked / MASKED_LIMIT)}
+                                    </span>
+
+                                    <button
+                                        className="btn"
+                                        disabled={maskedOffset + MASKED_LIMIT >= totalMasked}
+                                        onClick={() => handlePageChange(maskedOffset + MASKED_LIMIT)}
+                                    >
+                                        Next →
                                     </button>
                                 </div>
                             )

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 
 const ProjectLanding = ({ onCreateProject, onLoadProject, onBrowse }) => {
     const [mode, setMode] = useState('landing'); // landing, create, load
+    const [loading, setLoading] = useState(false);
     const [loadPath, setLoadPath] = useState('');
     const [createForm, setCreateForm] = useState({
         name: '',
@@ -10,18 +11,25 @@ const ProjectLanding = ({ onCreateProject, onLoadProject, onBrowse }) => {
         classes: '' // comma separated
     });
 
-    const handleCreateSubmit = () => {
+    const handleCreateSubmit = async () => {
         if (!createForm.name || !createForm.parentDir || !createForm.rawImagesDir) {
             alert("Please fill in all required fields");
             return;
         }
-        const classesList = createForm.classes.split(',').map(c => c.trim()).filter(c => c);
-        onCreateProject({
-            name: createForm.name,
-            parent_dir: createForm.parentDir,
-            raw_images_dir: createForm.rawImagesDir,
-            classes: classesList
-        });
+        setLoading(true);
+        try {
+            const classesList = createForm.classes.split(',').map(c => c.trim()).filter(c => c);
+            await onCreateProject({
+                name: createForm.name,
+                parent_dir: createForm.parentDir,
+                raw_images_dir: createForm.rawImagesDir,
+                classes: classesList
+            });
+        } catch (e) {
+            // Error handled in parent
+        } finally {
+            setLoading(false);
+        }
     };
 
     if (mode === 'create') {
@@ -74,8 +82,10 @@ const ProjectLanding = ({ onCreateProject, onLoadProject, onBrowse }) => {
                 </div>
 
                 <div style={{ display: 'flex', gap: '10px' }}>
-                    <button className="btn btn-primary" onClick={handleCreateSubmit} style={{ flex: 1 }}>Create Project</button>
-                    <button className="btn" onClick={() => setMode('landing')} style={{ flex: 1 }}>Cancel</button>
+                    <button className="btn btn-primary" onClick={handleCreateSubmit} style={{ flex: 1 }} disabled={loading}>
+                        {loading ? "Creating..." : "Create Project"}
+                    </button>
+                    <button className="btn" onClick={() => setMode('landing')} style={{ flex: 1 }} disabled={loading}>Cancel</button>
                 </div>
             </div>
         );
