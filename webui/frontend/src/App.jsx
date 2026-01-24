@@ -790,7 +790,9 @@ function App() {
                 resize_width: parseInt(resizeWidth),
                 resize_height: parseInt(resizeHeight)
             };
-            const scaled = calculateScaledCrop(completedCrop);
+            // Fix: Use current 'crop' state, as 'completedCrop' might be stale if user manually edited inputs
+            // 'crop' is the single source of truth updated by both Drag and Manual Input
+            const scaled = calculateScaledCrop(crop);
             if (scaled) payload.crop = scaled;
 
             await axios.post(`${API_BASE}/preprocess`, payload);

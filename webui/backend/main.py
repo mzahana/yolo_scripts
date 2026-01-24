@@ -1397,6 +1397,7 @@ def run_extract_empty_task(request: ExtractEmptyRequest):
         img_src_path = None
         
         is_project_annotations = labeled_root.name == "annotations" or (labeled_root / "annotations").exists() # Heuristic
+        dataset_root = None
         
         # If user passed "annotations" folder directly:
         if labeled_root.name == "annotations":
@@ -1429,26 +1430,60 @@ def run_extract_empty_task(request: ExtractEmptyRequest):
                   img_src_path = dataset_root # Mixed dir?
 
         # Validation
-        if not img_src_path or not img_src_path.exists():
-             print(f"Warning: Could not pinpoint image source. Trying raw path: {raw_path}")
-             img_src_path = raw_path
-
-        print(f"Extracting empty from {img_src_path} -> {output_dir} using labels from {labels_dir}")
+        image_files = []
+        is_split = False
         
-        image_files = get_supported_image_files(img_src_path)
+        # Check for splits if img_src_path not explicitly found or we want to be robust
+        possible_splits = ["train", "valid", "test", "val"]
+        found_splits = []
+        if dataset_root:
+             found_splits = [s for s in possible_splits if (dataset_root / s / "images").exists()]
+        
+        if found_splits:
+             print(f"Extraction detected split dataset: {found_splits}")
+             is_split = True
+             for s in found_splits:
+                 split_imgs = get_supported_image_files(dataset_root / s / "images")
+                 image_files.extend(split_imgs)
+             print(f"Collected {len(image_files)} images from splits")
+        else:
+            if not img_src_path or not img_src_path.exists():
+                 print(f"Warning: Could not pinpoint image source. Trying raw path: {raw_path}")
+                 img_src_path = raw_path
+
+            print(f"Extracting empty from {img_src_path} -> {output_dir} using labels from {labels_dir}")
+            if img_src_path and img_src_path.exists():
+                image_files = get_supported_image_files(img_src_path)
+            else:
+                image_files = []
         
         # Filter if specific images requested
         if request.images_list:
             target_names = set(request.images_list)
-            image_files = [p for p in image_files if p.name in target_names]
+            # Fix: Compare stems, as stats API returns stems
+            image_files = [p for p in image_files if p.stem in target_names]
             print(f"Filtered extraction to {len(image_files)} specific images")
 
         app.state.task_progress["total"] = len(image_files)
         
         empty_count = 0
+        empty_count = 0
         for i, img_p in enumerate(image_files):
             # Check for label file
-            lbl_p = labels_dir / f"{img_p.stem}.txt"
+            # If split, we need to respect the split structure for label lookup?
+            # Or does the user just want "empty images"?
+            # The label_dir resolution before was simplistic for splits.
+            # If split, labels are in dataset_root/split/labels.
+            
+            if is_split:
+                 # Find which split this image belongs to
+                 # img_p.parent is .../split/images
+                 # labels should be .../split/labels
+                 # This assumes standard YOLO structure
+                 split_labels_dir = img_p.parent.parent / "labels"
+                 lbl_p = split_labels_dir / f"{img_p.stem}.txt"
+            else:
+                 lbl_p = labels_dir / f"{img_p.stem}.txt"
             
             is_empty = False
             if not lbl_p.exists():

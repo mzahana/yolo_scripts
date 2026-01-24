@@ -117,11 +117,7 @@ class ProjectManager:
             "config": config_data,
             "paths": abs_dirs
         }
-        return {
-            "path": str(root),
-            "config": config_data,
-            "paths": abs_dirs
-        }
+
 
     @staticmethod
     def update_project_config(project_path: str, updates: Dict) -> Dict:
@@ -147,6 +143,10 @@ class ProjectManager:
             json.dump(config_data, f, indent=4)
             
         return config_data
+        return config_data
+
+    @staticmethod
+    def create_dataset(project_path: str, dataset_name: str, strategy: str = "all", split_ratios: List[float] = [0.7, 0.2, 0.1]) -> Dict:
         """
         Creates a YOLO dataset from processed images and annotations.
         strategy: 'all' (copy all found pairs), 'random' (not implemented yet, defaults to all)
