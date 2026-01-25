@@ -1190,7 +1190,9 @@ function App() {
 
     const VerificationGallery = ({ onJumpToAnnotation }) => {
         // Use labels classes if available
-        const classes = availableClasses.length > 0 ? availableClasses : (datasetStats?.class_stats?.map(s => s.name) || []);
+        const rawClasses = availableClasses.length > 0 ? availableClasses : (datasetStats?.class_stats?.map(s => s.name) || []);
+        // Ensure "Empty" is an option
+        const classes = rawClasses.includes("Empty") ? rawClasses : [...rawClasses, "Empty"];
 
         // Restore scroll position
         React.useLayoutEffect(() => {

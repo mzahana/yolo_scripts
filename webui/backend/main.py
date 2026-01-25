@@ -1894,8 +1894,23 @@ def get_labeled_images(path: str, limit: int = 50, offset: int = 0, classes: Opt
         
         if target_classes:
             # Check if this item matches
-            has_match = any(cls in target_classes for cls in stats.keys())
-            if has_match:
+            # Handle "Empty" special case
+            is_empty = not stats
+            
+            match_found = False
+            
+            # 1. Check if "Empty" is requested and this image is empty
+            if "Empty" in target_classes and is_empty:
+                match_found = True
+            
+            # 2. Check if any other requested class is present in stats
+            if not match_found and stats:
+                # Filter out "Empty" from target_classes for this check to avoid confusion, though it won't match a key in stats anyway
+                real_targets = [c for c in target_classes if c != "Empty"]
+                if any(cls in real_targets for cls in stats.keys()):
+                    match_found = True
+            
+            if match_found:
                 results.append(item)
         else:
             results.append(item)
