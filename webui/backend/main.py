@@ -22,6 +22,7 @@ try:
     from auto_labeler import YOLOInference
     from crop_resize import process_image, get_supported_image_files
     from split_folder import split_folder
+    from sample_yolo_dataset import DatasetSampler
     from ultralytics import SAM
 except ImportError as e:
     print(f"Error importing scripts/ultralytics: {e}")
@@ -127,6 +128,11 @@ class CreateProjectRequest(BaseModel):
     raw_images_dir: str
     classes: List[str]
 
+class CreateProjectFromSplitRequest(BaseModel):
+    name: str
+    parent_dir: str
+    split_dataset_path: str
+
 class LoadProjectRequest(BaseModel):
     path: str
 
@@ -134,6 +140,15 @@ class CreateDatasetRequest(BaseModel):
     project_path: str
     name: str # Dataset name
     strategy: str = "all"
+    split_ratios: Optional[List[float]] = [0.7, 0.2, 0.1]
+
+class SampleRequest(BaseModel):
+    dataset_path: str
+    output_path: Optional[str] = None
+    count: Optional[int] = None
+    percentage: Optional[float] = None
+    class_percentages: Optional[str] = None # JSON string or "id:pct,id:pct"
+    seed: int = 42
 
 class UpdateConfigRequest(BaseModel):
     path: str
@@ -410,6 +425,17 @@ def create_project(request: CreateProjectRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/project/create_from_split")
+def create_project_from_split(request: CreateProjectFromSplitRequest):
+    try:
+        return ProjectManager.create_project_from_split(
+            request.name,
+            request.parent_dir,
+            request.split_dataset_path
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/project/load")
 def load_project(request: LoadProjectRequest):
     try:
@@ -423,7 +449,8 @@ def create_dataset(request: CreateDatasetRequest):
         return ProjectManager.create_dataset(
             request.project_path,
             request.name,
-            request.strategy
+            request.strategy,
+            request.split_ratios
         )
     except Exception as e:
         import traceback
@@ -1190,6 +1217,65 @@ def merge_datasets(request: MergeRequest, background_tasks: BackgroundTasks):
     app.state.task_progress["total"] = 0
 
     background_tasks.add_task(run_merge_task, request)
+    return {"status": "started"}
+
+def run_sampling_task(request: SampleRequest):
+    try:
+        app.state.task_progress["status"] = "sampling"
+        app.state.task_progress["message"] = "Starting sampling..."
+        
+        # Parse class percentages
+        class_pcts = None
+        if request.class_percentages:
+            try:
+                # Try JSON first
+                parsed = json.loads(request.class_percentages)
+                class_pcts = {int(k): float(v) for k,v in parsed.items()}
+            except:
+                # Try simple format
+                 class_pcts = {}
+                 for part in request.class_percentages.split(','):
+                     k,v = part.split(':')
+                     class_pcts[int(k)] = float(v)
+
+        def progress_callback(current, total, msg=""):
+            app.state.task_progress["current"] = current
+            app.state.task_progress["total"] = total
+            app.state.task_progress["message"] = msg
+            
+        sampler = DatasetSampler(
+            request.dataset_path, 
+            request.output_path, 
+            verbose=True
+        )
+        
+        summary = sampler.sample(
+            global_percentage=request.percentage,
+            class_percentages=class_pcts,
+            count=request.count,
+            seed=request.seed,
+            progress_callback=progress_callback
+        )
+        
+        app.state.task_progress["status"] = "idle"
+        app.state.task_progress["message"] = f"Sampling complete! Sampled {summary['total_sampled']} from {summary['total_original']} images."
+        app.state.task_progress["result"] = {
+            "output_dir": str(sampler.output_path),
+            "stats": summary
+        }
+        
+    except Exception as e:
+        app.state.task_progress["status"] = "error"
+        app.state.task_progress["message"] = f"Sampling Error: {str(e)}"
+        print(f"Sampling Error: {e}")
+
+@app.post("/api/dataset/sample_task")
+def sample_dataset_task(request: SampleRequest, background_tasks: BackgroundTasks):
+    p = Path(request.dataset_path)
+    if not p.exists():
+        raise HTTPException(status_code=400, detail="Dataset path does not exist")
+        
+    background_tasks.add_task(run_sampling_task, request)
     return {"status": "started"}
 
 def run_extract_task(request: ExtractRequest):

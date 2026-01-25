@@ -86,6 +86,151 @@ class ProjectManager:
         }
 
     @staticmethod
+    def create_project_from_split(name: str, parent_dir: str, split_dataset_path: str) -> Dict:
+        """
+        Creates a new project structure from an existing split dataset.
+        """
+        split_path = Path(split_dataset_path)
+        if not split_path.exists():
+            raise FileNotFoundError(f"Split dataset path '{split_path}' does not exist.")
+
+        data_yaml = split_path / "data.yaml"
+        if not data_yaml.exists():
+            # Try to find it in 1 level deep (common case)
+            found = list(split_path.glob("**/data.yaml"))
+            if found:
+                data_yaml = found[0]
+            else:
+                 raise FileNotFoundError(f"data.yaml not found in '{split_path}'. Required for split import.")
+        
+        # Parse classes from data.yaml
+        classes = []
+        try:
+            with open(data_yaml, 'r') as f:
+                y = yaml.safe_load(f)
+                names = y.get('names', [])
+                if isinstance(names, dict):
+                    sorted_keys = sorted([int(k) for k in names.keys()])
+                    classes = [names.get(k) if isinstance(k, str) else names.get(k) for k in sorted_keys] # Handle potential mix? usually dict keys are ints
+                    # Fix: yaml loaded dict keys could be int or str. 
+                    # If yaml is {0: 'a'}, keys are 0.
+                    classes = [names[k] for k in sorted(names.keys())]
+                elif isinstance(names, list):
+                    classes = names
+        except Exception as e:
+            raise ValueError(f"Failed to parse classes from data.yaml: {e}")
+
+        project_root = Path(parent_dir) / name
+        if project_root.exists():
+             raise FileExistsError(f"Project directory '{project_root}' already exists.")
+
+        # Create directories
+        # Note: 'raw' is created but empty as per requirements
+        dirs = {
+            "raw": project_root / f"{name}_raw_images",
+            "processed": project_root / f"{name}_processed_images",
+            "annotations": project_root / "annotations",
+            "masked": project_root / f"{name}_masked_images",
+            "filtered": project_root / f"{name}_filtered_images",
+            "labeled": project_root / f"{name}_datasets"
+        }
+        
+        for d in dirs.values():
+            d.mkdir(parents=True, exist_ok=True)
+            
+        # 1. Copy original dataset to _datasets subfolder
+        # We start with this to ensure we have the source
+        target_split_dir = dirs["labeled"] / split_path.name
+        if target_split_dir.exists():
+            shutil.rmtree(target_split_dir)
+        shutil.copytree(split_path, target_split_dir)
+        
+        # 2. Flatten images and annotations
+        # We traverse the COPIED split dataset to avoid touching original? 
+        # Actually requirements say "copy original... to _datasets", and "copy all images... to _processed".
+        # We can scan the target_split_dir we just created.
+        
+        # Common split structures:
+        # A) root/train/images/*.jpg, root/train/labels/*.txt
+        # B) root/images/train/*.jpg, root/labels/train/*.txt
+        # C) root/*.jpg (flat - unlikely with "split" desc but possible)
+        
+        # Robust Walker
+        image_exts = ['.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff']
+        
+        processed_count = 0
+        
+        # Walk through the COPIED dataset to find all images
+        for root, _, files in os.walk(target_split_dir):
+            for file in files:
+                if Path(file).suffix.lower() in image_exts:
+                    img_src = Path(root) / file
+                    
+                    # Copy image to processed
+                    shutil.copy2(img_src, dirs["processed"] / file)
+                    processed_count += 1
+                    
+                    # Look for corresponding label
+                    # Heuristic: check sibling 'labels' folder or parallel 'labels' folder
+                    # 1. Sibling 'labels' (e.g. dataset/train/images/a.jpg -> dataset/train/labels/a.txt)
+                    # 2. Parallel 'labels' (e.g. dataset/images/train/a.jpg -> dataset/labels/train/a.txt)
+                    # 3. Same folder
+                    
+                    lbl_name = f"{img_src.stem}.txt"
+                    lbl_src = None
+                    
+                    # Check same folder
+                    if (img_src.parent / lbl_name).exists():
+                         lbl_src = img_src.parent / lbl_name
+                    
+                    # Check sibling 'labels' folder ( ../labels )
+                    elif (img_src.parent.parent / "labels" / lbl_name).exists():
+                         lbl_src = img_src.parent.parent / "labels" / lbl_name
+                         
+                    # Check parallel structure with subfolder retention?
+                    # dataset/images/train -> dataset/labels/train
+                    elif "images" in img_src.parent.parts:
+                        # Replace 'images' with 'labels' in path parts
+                        # careful with indices
+                        parts = list(img_src.parent.parts)
+                        # Find right-most 'images'
+                        try:
+                            idx = len(parts) - 1 - parts[::-1].index("images")
+                            parts[idx] = "labels"
+                            potential_lbl = Path(*parts) / lbl_name
+                            if potential_lbl.exists():
+                                lbl_src = potential_lbl
+                        except ValueError:
+                            pass
+                            
+                    if lbl_src:
+                        shutil.copy2(lbl_src, dirs["annotations"] / lbl_name)
+
+        # Create classes.txt
+        with open(project_root / ProjectManager.CLASSES_FILENAME, 'w') as f:
+            for cls in classes:
+                f.write(f"{cls}\n")
+                
+        # Create Config
+        from datetime import datetime
+        config = ProjectConfig(
+            name=name,
+            created_at=datetime.now().isoformat(),
+            classes=classes,
+            dirs={k: v.name for k, v in dirs.items()}
+        )
+        # Force model_path if best.pt exists in split? No requirement for that.
+        
+        with open(project_root / ProjectManager.CONFIG_FILENAME, 'w') as f:
+            f.write(config.model_dump_json(indent=4))
+            
+        return {
+            "path": str(project_root),
+            "config": config.model_dump(),
+            "imported_count": processed_count
+        }
+
+    @staticmethod
     def load_project(project_path: str) -> Dict:
         """
         Loads an existing project.

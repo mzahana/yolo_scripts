@@ -41,260 +41,247 @@ import random
 import shutil
 import yaml
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Callable, Union
 
-def validate_dataset_structure(dataset_path: Path) -> List[str]:
-    """
-    Validate that the dataset has the required YOLO structure.
-    
-    Args:
-        dataset_path: Path to the dataset directory
+class DatasetSampler:
+    def __init__(self, dataset_path: Union[str, Path], output_path: Optional[Union[str, Path]] = None, verbose: bool = False):
+        self.dataset_path = Path(dataset_path)
+        self.verbose = verbose
+        self.structure_type = self._detect_structure()
         
-    Returns:
-        List of available splits
-        
-    Raises:
-        ValueError: If required structure is not found
-    """
-    if not dataset_path.exists():
-        raise ValueError(f"Dataset path does not exist: {dataset_path}")
-    
-    # Check for data.yaml
-    data_yaml = dataset_path / "data.yaml"
-    if not data_yaml.exists():
-        raise ValueError(f"data.yaml not found in {dataset_path}")
-    
-    # Check for required splits
-    required_splits = ['train', 'valid']
-    optional_splits = ['test']
-    available_splits = []
-    
-    for split in required_splits + optional_splits:
-        split_path = dataset_path / split
-        if split_path.exists():
-            images_path = split_path / "images"
-            labels_path = split_path / "labels"
-            
-            if not images_path.exists():
-                raise ValueError(f"Missing images folder in {split} split")
-            if not labels_path.exists():
-                raise ValueError(f"Missing labels folder in {split} split")
-            
-            available_splits.append(split)
-    
-    # Check that at least train and valid exist
-    if 'train' not in available_splits or 'valid' not in available_splits:
-        raise ValueError("Dataset must have at least 'train' and 'valid' splits")
-    
-    return available_splits
+        if output_path:
+            self.output_path = Path(output_path)
+        else:
+            self.output_path = self.dataset_path.parent / f"{self.dataset_path.name}_sampled"
 
-def get_image_label_pairs(split_path: Path) -> List[Tuple[Path, Path]]:
-    """
-    Get corresponding image and label file pairs from a split directory.
-    
-    Args:
-        split_path: Path to the split directory (e.g., train, valid, test)
+    def _detect_structure(self) -> str:
+        """Detect if dataset is 'split' (train/val folders) or 'flat' (images/labels folders or root)."""
+        if (self.dataset_path / 'train').exists() and (self.dataset_path / 'valid').exists():
+            return 'split'
+        # Check for images folder or flat root (files directly in root)
+        # Note: A flat dataset usually has 'images' and 'labels' folders.
+        if (self.dataset_path / 'images').exists():
+            return 'flat'
         
-    Returns:
-        List of (image_path, label_path) tuples
-    """
-    images_path = split_path / "images"
-    labels_path = split_path / "labels"
-    
-    pairs = []
-    image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'}
-    
-    for img_file in images_path.iterdir():
-        if img_file.suffix.lower() in image_extensions:
-            # Find corresponding label file
-            label_file = labels_path / (img_file.stem + '.txt')
-            if label_file.exists():
-                pairs.append((img_file, label_file))
+        # If deeply flat (files in root), we treat as flat but need ot be careful. 
+        # For safety, we assume standard YOLO flat format: images/ and labels/ dirs.
+        # If not present, we can look for image files in root.
+        has_images = any(self.dataset_path.glob('*.jpg')) or any(self.dataset_path.glob('*.png'))
+        if has_images:
+            return 'flat_root'
+            
+        raise ValueError(f"Unknown dataset structure at {self.dataset_path}. Expected 'train/val' splits or 'images' folder.")
+
+    def _get_pairs(self, directory: Path) -> List[Tuple[Path, Path]]:
+        """Find image-label pairs in a directory (handling flat 'images'/'labels' or simple root)."""
+        images_dir = directory / 'images'
+        labels_dir = directory / 'labels'
+        
+        # fallback for flat_root
+        if not images_dir.exists() and self.structure_type == 'flat_root':
+            images_dir = directory
+            labels_dir = directory
+
+        if not images_dir.exists():
+            return []
+
+        pairs = []
+        # Support common extensions
+        exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.webp'}
+        
+        # Scan images
+        files = list(images_dir.iterdir())
+        
+        for img_file in files:
+            if img_file.suffix.lower() in exts:
+                # Expect label in labels_dir with same stem
+                label_file = labels_dir / (img_file.stem + '.txt')
+                if label_file.exists():
+                    pairs.append((img_file, label_file))
+                
+        return pairs
+
+    def _scan_classes(self, pairs: List[Tuple[Path, Path]]) -> Dict[int, List[Tuple[Path, Path]]]:
+        """Scan all pairs and map class_id -> list of pairs containing that class."""
+        class_map = {}
+        
+        for img_path, label_path in pairs:
+            try:
+                with open(label_path, 'r') as f:
+                    lines = f.readlines()
+                
+                # Get unique classes in this image
+                classes_in_img = set()
+                for line in lines:
+                    if not line.strip(): continue
+                    parts = line.split()
+                    if parts:
+                        cls_id = int(parts[0])
+                        classes_in_img.add(cls_id)
+                
+                for cls_id in classes_in_img:
+                    if cls_id not in class_map:
+                        class_map[cls_id] = []
+                    class_map[cls_id].append((img_path, label_path))
+            except Exception as e:
+                if self.verbose:
+                    print(f"Error reading label {label_path}: {e}")
+                    
+        return class_map
+
+    def sample(self, 
+               global_percentage: Optional[float] = None, 
+               class_percentages: Optional[Dict[int, float]] = None,
+               count: Optional[int] = None,
+               seed: int = 42,
+               progress_callback: Optional[Callable[[int, int, str], None]] = None) -> Dict[str, int]:
+        
+        random.seed(seed)
+        
+        splits = ['train', 'valid', 'test'] if self.structure_type == 'split' else ['.']
+        if self.structure_type == 'flat': splits = ['.'] # treat as root relative
+        if self.structure_type == 'flat_root': splits = ['.']
+
+        total_files = 0
+        # First pass to count total for progress
+        # (Approximation, real scanning takes time)
+        
+        self.output_path.mkdir(parents=True, exist_ok=True)
+        
+        # Copy config if exists
+        config_src = self.dataset_path / 'data.yaml'
+        if config_src.exists():
+            shutil.copy2(config_src, self.output_path / 'data.yaml')
+        
+        summary = {"total_original": 0, "total_sampled": 0}
+
+        for split_name in splits:
+            if progress_callback: progress_callback(0, 0, f"Scanning {split_name}...")
+            
+            src_dir = self.dataset_path / split_name if split_name != '.' else self.dataset_path
+            
+            # For output, we maintain structure
+            if split_name != '.':
+                dest_dir = self.output_path / split_name
             else:
-                print(f"Warning: No label found for {img_file.name}")
-    
-    return pairs
+                dest_dir = self.output_path
 
-def sample_pairs(pairs: List[Tuple[Path, Path]], count: Optional[int] = None, 
-                percentage: Optional[float] = None) -> List[Tuple[Path, Path]]:
-    """
-    Sample pairs based on count or percentage.
-    
-    Args:
-        pairs: List of (image_path, label_path) tuples
-        count: Number of pairs to sample
-        percentage: Percentage of pairs to sample
-        
-    Returns:
-        Sampled list of pairs
-    """
-    if count is not None:
-        sample_size = min(count, len(pairs))
-    elif percentage is not None:
-        sample_size = int(len(pairs) * percentage / 100)
-    else:
-        raise ValueError("Either count or percentage must be specified")
-    
-    return random.sample(pairs, sample_size)
+            pairs = self._get_pairs(src_dir)
+            summary["total_original"] += len(pairs)
+            
+            if not pairs:
+                continue
 
-def copy_sampled_data(sampled_pairs: List[Tuple[Path, Path]], output_split_path: Path, 
-                     verbose: bool = False) -> None:
-    """
-    Copy sampled image and label pairs to output directory.
-    
-    Args:
-        sampled_pairs: List of (image_path, label_path) tuples to copy
-        output_split_path: Output split directory path
-        verbose: Whether to print copy operations
-    """
-    output_images = output_split_path / "images"
-    output_labels = output_split_path / "labels"
-    
-    output_images.mkdir(parents=True, exist_ok=True)
-    output_labels.mkdir(parents=True, exist_ok=True)
-    
-    for img_path, label_path in sampled_pairs:
-        # Copy image
-        shutil.copy2(img_path, output_images / img_path.name)
-        # Copy label
-        shutil.copy2(label_path, output_labels / label_path.name)
-        
-        if verbose:
-            print(f"Copied: {img_path.name}")
+            selected_pairs = set()
+
+            # Strategy 1: Global Count
+            if count is not None:
+                k = min(count, len(pairs))
+                selected_pairs = set(random.sample(pairs, k))
+
+            # Strategy 2: Global Percentage
+            elif global_percentage is not None:
+                k = int(len(pairs) * (global_percentage / 100.0))
+                selected_pairs = set(random.sample(pairs, k))
+
+            # Strategy 3: Per-Class Percentage
+            elif class_percentages is not None:
+                # Scan classes
+                if progress_callback: progress_callback(0, len(pairs), f"Analyzing classes in {split_name}...")
+                class_map = self._scan_classes(pairs)
+                
+                # Union strategy: For each class, sample X%. Add to set.
+                for cls_id, cls_pairs in class_map.items():
+                    pct = class_percentages.get(cls_id, 0) # Default to 0? Or 100? Assuming 0 if not specified implies "don't care about this class", but usually means 0.
+                    # Wait, if user specifies some classes, others should be 0? 
+                    # Let's assume user provides map for ALL classes they want. 
+                    if pct > 0:
+                        k = int(len(cls_pairs) * (pct / 100.0))
+                        if k > 0:
+                            selected_pairs.update(random.sample(cls_pairs, k))
+            
+            # Copy Files
+            if split_name != '.':
+                (dest_dir / 'images').mkdir(parents=True, exist_ok=True)
+                (dest_dir / 'labels').mkdir(parents=True, exist_ok=True)
+            else:
+                # Flat structure
+                if (src_dir / 'images').exists():
+                    (dest_dir / 'images').mkdir(parents=True, exist_ok=True)
+                    (dest_dir / 'labels').mkdir(parents=True, exist_ok=True)
+                else:
+                    # Flat root output - messy but preserves input style
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+
+            total_to_copy = len(selected_pairs)
+            summary["total_sampled"] += total_to_copy
+            
+            processed = 0
+            for img_path, label_path in selected_pairs:
+                processed += 1
+                if progress_callback and processed % 10 == 0:
+                    progress_callback(processed, total_to_copy, f"Copying {split_name}: {processed}/{total_to_copy}")
+
+                # Determine relative structure for copy target
+                # If structure is standard (images/labels), copy to those folders
+                if (src_dir / 'images').exists():
+                   shutil.copy2(img_path, dest_dir / 'images' / img_path.name)
+                   shutil.copy2(label_path, dest_dir / 'labels' / label_path.name)
+                else:
+                   # Flat root
+                   shutil.copy2(img_path, dest_dir / img_path.name)
+                   shutil.copy2(label_path, dest_dir / label_path.name)
+
+        return summary
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Randomly sample images from a YOLO format dataset",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  %(prog)s /path/to/dataset --count 1000
-  %(prog)s /path/to/dataset --percentage 15
-  %(prog)s /path/to/dataset --count 500 --output_dir /path/to/output --verbose
-        """
-    )
-    
-    parser.add_argument(
-        'dataset_path',
-        type=str,
-        help='Path to the YOLO dataset directory'
-    )
-    
-    # Sampling options (mutually exclusive)
-    sampling_group = parser.add_mutually_exclusive_group(required=True)
-    sampling_group.add_argument(
-        '--count', '-c',
-        type=int,
-        help='Number of random images to sample from each split'
-    )
-    sampling_group.add_argument(
-        '--percentage', '-p',
-        type=float,
-        help='Percentage of images to sample from each split (0-100)'
-    )
-    
-    parser.add_argument(
-        '--output_dir', '-o',
-        type=str,
-        help='Output directory for sampled dataset (default: parent_dir/original_name_sampled)'
-    )
-    
-    parser.add_argument(
-        '--verbose', '-v',
-        action='store_true',
-        help='Enable verbose output'
-    )
-    
-    parser.add_argument(
-        '--seed',
-        type=int,
-        default=42,
-        help='Random seed for reproducible sampling (default: 42)'
-    )
+    parser = argparse.ArgumentParser(description="YOLO Dataset Sampler")
+    parser.add_argument('dataset_path', help="Input dataset path")
+    parser.add_argument('--output_dir', help="Output directory")
+    parser.add_argument('--count', type=int, help="Fixed number of images")
+    parser.add_argument('--percentage', type=float, help="Global percentage (0-100)")
+    parser.add_argument('--class_percentages', type=str, help="JSON string or 'id:pct,id:pct' for class percentages")
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--verbose', action='store_true')
     
     args = parser.parse_args()
     
-    # Validate arguments
-    if args.percentage is not None and (args.percentage <= 0 or args.percentage > 100):
-        parser.error("Percentage must be between 0 and 100")
+    # Parse class percentages if string
+    class_pcts = None
+    if args.class_percentages:
+        import json
+        try:
+            class_pcts = json.loads(args.class_percentages)
+            # Ensure keys are ints
+            class_pcts = {int(k): float(v) for k,v in class_pcts.items()}
+        except:
+             # Try simple format 0:50,1:20
+             class_pcts = {}
+             for part in args.class_percentages.split(','):
+                 k,v = part.split(':')
+                 class_pcts[int(k)] = float(v)
+
+    sampler = DatasetSampler(args.dataset_path, args.output_dir, args.verbose)
     
-    if args.count is not None and args.count <= 0:
-        parser.error("Count must be positive")
-    
-    # Set random seed
-    random.seed(args.seed)
-    
-    # Convert paths
-    dataset_path = Path(args.dataset_path)
-    
-    try:
-        # Validate dataset structure
-        print(f"Validating dataset structure at {dataset_path}")
-        available_splits = validate_dataset_structure(dataset_path)
-        print(f"Found splits: {', '.join(available_splits)}")
-        
-        # Determine output directory
-        if args.output_dir:
-            output_path = Path(args.output_dir)
+    def console_progress(current, total, msg):
+        if total > 0:
+            print(f"\r{msg} [{current}/{total}]", end='')
         else:
-            parent_dir = dataset_path.parent
-            dataset_name = dataset_path.name
-            if args.count:
-                suffix = f"sampled_{args.count}"
-            else:
-                suffix = f"sampled_{args.percentage}pct"
-            output_path = parent_dir / f"{dataset_name}_{suffix}"
-        
-        print(f"Output directory: {output_path}")
-        output_path.mkdir(parents=True, exist_ok=True)
-        
-        # Copy data.yaml
-        shutil.copy2(dataset_path / "data.yaml", output_path / "data.yaml")
-        print("Copied data.yaml")
-        
-        # Process each split
-        total_original = 0
-        total_sampled = 0
-        
-        for split in available_splits:
-            print(f"\nProcessing {split} split...")
-            
-            # Get image-label pairs
-            pairs = get_image_label_pairs(dataset_path / split)
-            total_original += len(pairs)
-            
-            if not pairs:
-                print(f"Warning: No valid image-label pairs found in {split} split")
-                continue
-            
-            # Sample pairs
-            sampled_pairs = sample_pairs(pairs, args.count, args.percentage)
-            total_sampled += len(sampled_pairs)
-            
-            print(f"Sampling {len(sampled_pairs)} from {len(pairs)} pairs in {split}")
-            
-            # Copy sampled data
-            output_split_path = output_path / split
-            copy_sampled_data(sampled_pairs, output_split_path, args.verbose)
-        
-        # Summary
-        print(f"\n{'='*50}")
-        print(f"Sampling completed successfully!")
-        print(f"Total original images: {total_original}")
-        print(f"Total sampled images: {total_sampled}")
-        if total_original > 0:
-            print(f"Sampling ratio: {total_sampled/total_original*100:.1f}%")
-        print(f"Output saved to: {output_path}")
-        print(f"{'='*50}")
-        
-    except ValueError as e:
-        print(f"Error: {e}")
-        return 1
-    except Exception as e:
-        print(f"Unexpected error: {e}")
-        return 1
-    
-    return 0
+            print(f"\r{msg}", end='')
+
+    summary = sampler.sample(
+        global_percentage=args.percentage,
+        class_percentages=class_pcts,
+        count=args.count,
+        seed=args.seed,
+        progress_callback=console_progress if args.verbose else None
+    )
+    print("\nDone.")
+    print(f"Original: {summary['total_original']}")
+    print(f"Sampled: {summary['total_sampled']}")
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     exit(main())

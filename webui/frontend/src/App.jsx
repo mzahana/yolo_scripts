@@ -10,6 +10,11 @@ import {
 import AnnotationTool from './components/AnnotationTool';
 
 import ProjectLanding from './components/ProjectLanding';
+import ProgressBar from './components/ProgressBar';
+import LightboxModal from './components/LightboxModal';
+import VerificationGallery from './components/VerificationGallery';
+import StatsView from './components/StatsView';
+import DatasetSampling from './components/DatasetSampling';
 
 const API_BASE = 'http://localhost:8000/api';
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
@@ -198,8 +203,14 @@ function App() {
 
     const handleCreateProject = async (data) => {
         try {
-            const res = await axios.post(`${API_BASE}/project/create`, data);
-            showNotification('Project created successfully!');
+            let res;
+            if (data.is_split_mode) {
+                res = await axios.post(`${API_BASE}/project/create_from_split`, data);
+                showNotification('Project created from split dataset successfully!');
+            } else {
+                res = await axios.post(`${API_BASE}/project/create`, data);
+                showNotification('Project created successfully!');
+            }
             await handleLoadProject(res.data.path);
         } catch (err) {
             console.error(err);
@@ -1159,531 +1170,12 @@ function App() {
         }
     }, [filterClasses, searchQuery]);
 
-    const ProgressBar = ({ progress, type }) => {
-        if (!progress) return null;
-        // Show if status matches type OR if it's an error and we were doing this type
-        // (Note: we don't have a direct 'previousType' but we can check if progress.status is error)
-        if (progress.status !== type && progress.status !== 'error') return null;
-
-        const isError = progress.status === 'error';
-        const percentage = progress.total > 0 ? (progress.current / progress.total) * 100 : 0;
-
-        return (
-            <div style={{ marginTop: '20px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '0.8rem', color: isError ? '#ef4444' : 'inherit' }}>
-                    <span style={{ fontWeight: isError ? 'bold' : 'normal' }}>
-                        {isError ? '❌ ' : ''}{progress.message}
-                    </span>
-                    {!isError && <span>{Math.round(percentage || 0)}% ({progress.current}/{progress.total})</span>}
-                </div>
-                {!isError && (
-                    <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', overflow: 'hidden' }}>
-                        <div style={{
-                            width: `${percentage || 0}%`, height: '100%', background: 'var(--primary)',
-                            transition: 'width 0.3s ease'
-                        }} />
-                    </div>
-                )}
-            </div>
-        );
-    };
-
-    const VerificationGallery = ({ onJumpToAnnotation }) => {
-        // Use labels classes if available
-        const rawClasses = availableClasses.length > 0 ? availableClasses : (datasetStats?.class_stats?.map(s => s.name) || []);
-        // Ensure "Empty" is an option
-        const classes = rawClasses.includes("Empty") ? rawClasses : [...rawClasses, "Empty"];
-
-        // Restore scroll position
-        React.useLayoutEffect(() => {
-            const scrollContainer = document.querySelector('.main-content'); // Assuming main-content is the scrollable area
-            if (scrollContainer && verificationScroll > 0) {
-                scrollContainer.scrollTop = verificationScroll;
-            }
-
-            // Save scroll on unmount/change
-            return () => {
-                if (scrollContainer) {
-                    setVerificationScroll(scrollContainer.scrollTop);
-                }
-            };
-        }, []);
-
-        // Also listen to scroll to update state periodically if needed, but unmount is safer for exact restore
-        // However, if we switch tabs, unmount triggers.
-        // We need to capture the scroll of `.main-content` or whatever executes the overflow.
-        // In this App structure, `.main-content` seems to be the main scrollable area? 
-        // Or is it `section-card`?
-        // Looking at css, usually main-content or container.
-        // Let's attach a scroll listener to update the state ref or debit.
-
-        return (
-            <div>
-                {/* Filter UI */}
-                <div className="glass" style={{ padding: '20px', marginBottom: '30px', borderRadius: '12px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '15px' }}>
-                        <div style={{ fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            <span>🔍 Filter by Class</span>
-                            {filterClasses.length > 0 && (
-                                <button
-                                    className="btn"
-                                    style={{ padding: '2px 10px', fontSize: '0.7rem', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444' }}
-                                    onClick={() => setFilterClasses([])}
-                                >
-                                    Clear All
-                                </button>
-                            )}
-                        </div>
-
-                        {/* Search Input */}
-                        <div style={{ flex: 1, margin: '0 20px', maxWidth: '300px' }}>
-                            <div className="input-group">
-                                <span className="input-prefix">🔎</span>
-                                <input
-                                    type="text"
-                                    className="input"
-                                    placeholder="Search images..."
-                                    value={searchQuery}
-                                    onChange={(e) => setSearchQuery(e.target.value)}
-                                    style={{ paddingLeft: '35px' }}
-                                />
-                                {searchQuery && (
-                                    <button
-                                        onClick={() => setSearchQuery('')}
-                                        style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', opacity: 0.5 }}
-                                    >
-                                        ✕
-                                    </button>
-                                )}
-                            </div>
-                        </div>
-
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                            <div style={{ fontSize: '0.8rem', opacity: 0.6 }}>
-                                Showing {maskedOffset + 1}-{Math.min(maskedOffset + maskedImages.length, totalMasked)} of {totalMasked}
-                            </div>
-                            <button
-                                className="btn btn-secondary"
-                                style={{
-                                    padding: '4px 12px',
-                                    fontSize: '0.75rem',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '6px',
-                                    borderColor: 'rgba(255,255,255,0.2)'
-                                }}
-                                onClick={handleGenerateMasks}
-                                disabled={isTaskRunning}
-                                title="Force re-generation of all masked images from current labels"
-                            >
-                                🔄 Re-generate Masks
-                            </button>
-                            <button
-                                className="btn btn-secondary"
-                                style={{
-                                    padding: '4px 12px',
-                                    fontSize: '0.75rem',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '6px',
-                                    borderColor: 'rgba(255,255,255,0.2)'
-                                }}
-                                onClick={handleRefreshGallery}
-                                title="Refresh gallery to show latest images and labels"
-                            >
-                                🔄 Refresh
-                            </button>
-                        </div>
-                    </div>
-
-                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                        {classes.map(cls => (
-                            <button
-                                key={cls}
-                                className={`badge ${filterClasses.includes(cls) ? 'active' : ''}`}
-                                style={{
-                                    cursor: 'pointer',
-                                    border: '1px solid var(--border-color)',
-                                    background: filterClasses.includes(cls) ? 'var(--primary)' : 'transparent',
-                                    color: filterClasses.includes(cls) ? 'white' : 'inherit',
-                                    padding: '5px 12px'
-                                }}
-                                onClick={() => toggleFilterClass(cls)}
-                            >
-                                {cls}
-                            </button>
-                        ))}
-                        {classes.length === 0 && (
-                            <div style={{ fontSize: '0.8rem', opacity: 0.5, fontStyle: 'italic' }}>
-                                No classes detected. Run labeling or stats task to see class filters.
-                            </div>
-                        )}
-                    </div>
-                </div>
-
-                {/* Content States */}
-                {maskedImages.length === 0 && !isTaskRunning && (
-                    <div style={{ padding: '20px 0' }}>
-                        {hasLabels ? (
-                            <div className="glass" style={{ padding: '60px', textAlign: 'center' }}>
-                                <h3>{totalMasked === 0 && hasMasks ? "Masked Folder Empty" : "No Masked Images Found"}</h3>
-                                <p style={{ opacity: 0.7, marginBottom: '20px' }}>
-                                    We found labels but no visual overlays (masked images). To verify the annotations visually, you need to generate images with the labels drawn on them.
-                                </p>
-                                <button
-                                    className="btn btn-primary"
-                                    onClick={handleGenerateMasks}
-                                    disabled={isTaskRunning}
-                                >
-                                    📦 Generate Masked Images
-                                </button>
-                                <ProgressBar progress={taskProgress} type="generating_masks" />
-                            </div>
-                        ) : (
-                            <div style={{ padding: '60px', textAlign: 'center', opacity: 0.5 }}>
-                                {!hasMasks && !hasLabels
-                                    ? "No labeled images or masks found. Run auto-labeling first."
-                                    : "No images match the selected filter."}
-                            </div>
-                        )}
-                    </div>
-                )}
-
-                {maskedImages.length > 0 && (
-                    <div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '20px' }}>
-                            {maskedImages.map((img, i) => (
-                                <div key={i} className="glass" style={{ padding: '10px', borderRadius: '12px', display: 'flex', flexDirection: 'column' }}>
-                                    <div
-                                        style={{ cursor: 'pointer', overflow: 'hidden', borderRadius: '8px' }}
-                                        onClick={() => setSelectedLightboxImage(img)}
-                                    >
-                                        <img
-                                            src={`http://localhost:8000${maskedMountUrl}/${img.name}?t=${cacheBuster}`}
-                                            style={{ width: '100%', height: 'auto', display: 'block', transition: 'transform 0.3s' }}
-                                            className="gallery-img"
-                                            alt={img.name}
-                                        />
-                                    </div>
-                                    <div style={{ padding: '10px 0', flex: 1 }}>
-                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '8px', wordBreak: 'break-all', fontFamily: 'monospace' }}>
-                                            {img.name}
-                                        </div>
-                                        <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginBottom: '10px' }}>
-                                            {Object.entries(img.stats).map(([cls, count]) => (
-                                                <span key={cls} className="badge" style={{ fontSize: '0.65rem', padding: '2px 6px' }}>
-                                                    {cls}: {count}
-                                                </span>
-                                            ))}
-                                            {Object.keys(img.stats).length === 0 && (
-                                                <span className="badge" style={{ fontSize: '0.65rem', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444' }}>Empty</span>
-                                            )}
-                                        </div>
-                                        <div style={{ display: 'flex', gap: '8px' }}>
-                                            <button
-                                                className="btn"
-                                                style={{ flex: 1, padding: '8px 5px', fontSize: '0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
-                                                onClick={() => onJumpToAnnotation(img.name)}
-                                                title="Jump to Annotation Tool"
-                                            >
-                                                ✏️ Edit
-                                            </button>
-                                            <button
-                                                className="btn"
-                                                style={{ flex: 1, padding: '8px 5px', fontSize: '0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
-                                                onClick={() => handleFilterImage(img.name)}
-                                                title="Copy to Filtered Folder"
-                                            >
-                                                📂 Filter
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                        {
-                            totalMasked > MASKED_LIMIT && (
-                                <div style={{ marginTop: '40px', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '20px' }}>
-                                    <button
-                                        className="btn"
-                                        disabled={maskedOffset === 0}
-                                        onClick={() => handlePageChange(maskedOffset - MASKED_LIMIT)}
-                                    >
-                                        ← Previous
-                                    </button>
-
-                                    <span style={{ opacity: 0.7 }}>
-                                        Page {Math.floor(maskedOffset / MASKED_LIMIT) + 1} of {Math.ceil(totalMasked / MASKED_LIMIT)}
-                                    </span>
-
-                                    <button
-                                        className="btn"
-                                        disabled={maskedOffset + MASKED_LIMIT >= totalMasked}
-                                        onClick={() => handlePageChange(maskedOffset + MASKED_LIMIT)}
-                                    >
-                                        Next →
-                                    </button>
-                                </div>
-                            )
-                        }
-                    </div>
-                )}
-            </div>
-        );
-    };
-
-    // const scaledDisplay = calculateScaledCrop(completedCrop);
 
 
 
-    const LightboxModal = () => {
-        if (!selectedLightboxImage) return null;
-        return (
-            <div className="modal-overlay" onClick={() => setSelectedLightboxImage(null)} style={{ background: 'rgba(0,0,0,0.9)', zIndex: 2000 }}>
-                <div className="lightbox-content" onClick={e => e.stopPropagation()} style={{ position: 'relative', maxWidth: '90vw', maxHeight: '90vh' }}>
-                    <img
-                        src={`http://localhost:8000${maskedMountUrl}/${selectedLightboxImage.name}?t=${cacheBuster}`}
-                        style={{ width: '100%', height: 'auto', borderRadius: '12px', boxShadow: '0 0 40px rgba(0,0,0,0.5)' }}
-                        alt="Enlarged"
-                    />
-                    <button
-                        className="browse-btn"
-                        style={{ position: 'absolute', top: '20px', right: '20px', background: 'rgba(0,0,0,0.5)', border: '1px solid rgba(255,255,255,0.2)' }}
-                        onClick={() => setSelectedLightboxImage(null)}
-                    >
-                        ✕ Close
-                    </button>
-                    <div style={{ padding: '20px 0', color: 'white' }}>
-                        <h3 style={{ margin: 0 }}>{selectedLightboxImage.name}</h3>
-                        <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-                            {Object.entries(selectedLightboxImage.stats).map(([cls, count]) => (
-                                <span key={cls} className="badge" style={{ fontSize: '0.9rem' }}>{cls}: {count}</span>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            </div>
-        );
-    };
 
 
-    const StatsView = () => {
-        // Prepare options
-        const options = [
-            { label: 'Entire Project (Current State)', value: projectPaths?.annotations || '' },
-            ...existingDatasets.map(ds => ({ label: `Dataset: ${ds.name}`, value: ds.path }))
-        ];
 
-        const [statsScope, setStatsScope] = useState('combined');
-
-        // Handle selection
-        const handleSourceChange = (e) => {
-            const val = e.target.value;
-            if (val) {
-                setStatsPath(val);
-                fetchStats(val);
-                setStatsScope('combined'); // Reset scope
-            }
-        };
-
-        const getDisplayStats = () => {
-            if (!datasetStats) return null;
-            if (statsScope === 'combined' || !datasetStats.per_split_stats || !datasetStats.per_split_stats[statsScope]) {
-                return datasetStats;
-            }
-            const s = datasetStats.per_split_stats[statsScope];
-            return {
-                total_images: s.total_images,
-                total_objects: s.total_objects,
-                empty_count: s.empty_images_count,
-                class_stats: s.class_counts.map(c => ({ name: c.class, count: c.count, percentage: c.percentage })),
-                empty_images: s.empty_images
-            };
-        };
-
-        const displayStats = getDisplayStats();
-
-        return (
-            <div className="stats-container">
-                <div style={{ marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <label style={{ fontWeight: 'bold' }}>Stats Source:</label>
-                    <select
-                        className="input"
-                        style={{ maxWidth: '300px' }}
-                        value={statsPath || (projectPaths?.annotations || '')}
-                        onChange={handleSourceChange}
-                    >
-                        {options.map((opt, i) => (
-                            <option key={i} value={opt.value}>{opt.label}</option>
-                        ))}
-                    </select>
-                    <button className="btn btn-secondary" onClick={() => fetchStats(statsPath)}>🔄 Refresh</button>
-                </div>
-
-                {!displayStats ? (
-                    <div style={{ padding: '40px', textAlign: 'center', opacity: 0.5 }}>
-                        Select a source to view statistics.
-                    </div>
-                ) : (
-                    <>
-                        {datasetStats.per_split_stats && (
-                            <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
-                                <button
-                                    className={`btn ${statsScope === 'combined' ? 'btn-primary' : 'btn-secondary'}`}
-                                    onClick={() => setStatsScope('combined')}
-                                >
-                                    Combined
-                                </button>
-                                {Object.keys(datasetStats.per_split_stats).map(split => (
-                                    <button
-                                        key={split}
-                                        className={`btn ${statsScope === split ? 'btn-primary' : 'btn-secondary'}`}
-                                        onClick={() => setStatsScope(split)}
-                                        style={{ textTransform: 'capitalize' }}
-                                    >
-                                        {split}
-                                    </button>
-                                ))}
-                            </div>
-                        )}
-
-                        <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', marginBottom: '30px' }}>
-                            <div className="stats-card glass">
-                                <div style={{ opacity: 0.6, fontSize: '0.9rem' }}>Total Images</div>
-                                <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>{displayStats.total_images}</div>
-                            </div>
-                            <div className="stats-card glass">
-                                <div style={{ opacity: 0.6, fontSize: '0.9rem' }}>Total Objects</div>
-                                <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>{displayStats.total_objects}</div>
-                            </div>
-                            <div className="stats-card glass">
-                                <div style={{ opacity: 0.6, fontSize: '0.9rem' }}>Empty Images</div>
-                                <div style={{ fontSize: '2rem', fontWeight: 'bold', color: displayStats.empty_count > 0 ? '#ef4444' : 'var(--accent)' }}>
-                                    {displayStats.empty_count}
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '30px', marginBottom: '30px' }}>
-                            <div className="glass section-card">
-                                <div className="section-title" style={{ fontSize: '1.2rem', marginBottom: '20px' }}>Objects per Class</div>
-                                <div style={{ height: '350px' }}>
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <BarChart data={displayStats.class_stats} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-                                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                                            <XAxis dataKey="name" stroke="var(--text-muted)" angle={-45} textAnchor="end" height={80} interval={0} />
-                                            <YAxis stroke="var(--text-muted)" />
-                                            <Tooltip
-                                                contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.9)', border: '1px solid var(--border-color)', borderRadius: '8px' }}
-                                                itemStyle={{ color: 'white' }}
-                                            />
-                                            <Bar dataKey="count" fill="var(--primary)" radius={[4, 4, 0, 0]}>
-                                                {datasetStats.class_stats.map((entry, index) => (
-                                                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                                                ))}
-                                            </Bar>
-                                        </BarChart>
-                                    </ResponsiveContainer>
-                                </div>
-                            </div>
-
-                            <div className="glass section-card">
-                                <div className="section-title" style={{ fontSize: '1.2rem', marginBottom: '20px' }}>Class Distribution (%)</div>
-                                <div style={{ height: '350px' }}>
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <PieChart>
-                                            <Pie
-                                                data={displayStats.class_stats}
-                                                cx="50%"
-                                                cy="50%"
-                                                innerRadius={60}
-                                                outerRadius={100}
-                                                fill="#8884d8"
-                                                paddingAngle={5}
-                                                dataKey="count"
-                                                nameKey="name"
-                                            >
-                                                {displayStats.class_stats.map((entry, index) => (
-                                                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                                                ))}
-                                            </Pie>
-                                            <Tooltip
-                                                contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.9)', border: '1px solid var(--border-color)', borderRadius: '8px' }}
-                                                itemStyle={{ color: 'white' }}
-                                            />
-                                            <Legend />
-                                        </PieChart>
-                                    </ResponsiveContainer>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="glass section-card">
-                            <div className="section-title" style={{ fontSize: '1.2rem', marginBottom: '20px' }}>Detailed Report</div>
-                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                                <thead>
-                                    <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>
-                                        <th style={{ padding: '15px' }}>Class Name</th>
-                                        <th style={{ padding: '15px' }}>Count</th>
-                                        <th style={{ padding: '15px' }}>Percentage</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {displayStats.class_stats.map((stat, i) => (
-                                        <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                                            <td style={{ padding: '15px', fontWeight: 'bold' }}>{stat.name}</td>
-                                            <td style={{ padding: '15px' }}>{stat.count}</td>
-                                            <td style={{ padding: '15px' }}>{stat.percentage}%</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-
-                        <div className="glass section-card" style={{ marginTop: '30px' }}>
-                            <div className="section-title" style={{ fontSize: '1.2rem', color: '#ef4444', marginBottom: '15px' }}>Images with No Detections ({displayStats.empty_count})</div>
-                            {displayStats.empty_count > 0 ? (
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '10px', marginTop: '10px' }}>
-                                    {displayStats.empty_images.slice(0, 12).map((imgName, i) => (
-                                        <div key={i} className="card" style={{ padding: '10px', fontSize: '0.8rem', textAlign: 'center' }}>
-                                            {imgName}
-                                        </div>
-                                    ))}
-                                    {displayStats.empty_images.length > 12 && (
-                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.5, fontSize: '0.8rem' }}>
-                                            +{displayStats.empty_images.length - 12} more
-                                        </div>
-                                    )}
-                                </div>
-                            ) : (
-                                <div style={{ opacity: 0.5, fontStyle: 'italic', padding: '20px' }}>
-                                    All images have detections!
-                                </div>
-                            )}
-
-                            {displayStats.empty_count > 0 && (
-                                <div style={{ marginTop: '20px' }}>
-                                    <div style={{ marginTop: '25px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                                            <button
-                                                className="btn btn-secondary"
-                                                style={{ borderColor: '#ef4444', color: '#ef4444' }}
-                                                onClick={() => handleExtractEmpty(displayStats.empty_images)}
-                                                disabled={isTaskRunning}
-                                            >
-                                                📦 Extract Empty Images to a Folder
-                                            </button>
-                                        </div>
-                                        <ProgressBar progress={taskProgress} type="extracting_empty" />
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    </>
-                )}
-            </div>
-        );
-    };
 
     return (
         <div className="app-wrapper">
@@ -1754,7 +1246,13 @@ function App() {
                 )}
 
                 <FileBrowserModal />
-                <LightboxModal />
+                <FileBrowserModal />
+                <LightboxModal
+                    selectedLightboxImage={selectedLightboxImage}
+                    onClose={() => setSelectedLightboxImage(null)}
+                    maskedMountUrl={maskedMountUrl}
+                    cacheBuster={cacheBuster}
+                />
 
                 <div className="container">
                     {activeTab === 'project_home' && (
@@ -1900,8 +1398,9 @@ function App() {
                                     }
                                 }}
                             >
-                                Generate Dataset
+                                {isTaskRunning && taskProgress?.status === 'creating_dataset' ? '⏳ Generating...' : 'Generate Dataset'}
                             </button>
+                            <ProgressBar progress={taskProgress} type="creating_dataset" />
                         </section>
                     )}
 
@@ -2198,6 +1697,17 @@ function App() {
                                     )}
                                 </div>
                             </div>
+                            <div style={{ height: '30px' }}></div>
+
+                            <DatasetSampling
+                                initialPath={datasetPath}
+                                projectConfig={projectConfig}
+                                onBrowse={handleLandingBrowse}
+                                showNotification={showNotification}
+                                isTaskRunning={isTaskRunning}
+                                taskProgress={taskProgress}
+                                onStartTask={() => setIsTaskRunning(true)}
+                            />
                         </section>
                     )}
 
@@ -2475,6 +1985,9 @@ function App() {
                                     </div>
                                 </div>
                             )}
+
+
+
                         </section>
                     )}
 
@@ -2484,7 +1997,33 @@ function App() {
                             <p style={{ color: 'var(--text-muted)', marginBottom: '30px' }}>
                                 Preview labeled results with confidence scores and bounding boxes.
                             </p>
-                            <VerificationGallery onJumpToAnnotation={jumpToAnnotation} />
+                            <VerificationGallery
+                                onJumpToAnnotation={jumpToAnnotation}
+                                availableClasses={availableClasses}
+                                datasetStats={datasetStats}
+                                filterClasses={filterClasses}
+                                setFilterClasses={setFilterClasses}
+                                searchQuery={searchQuery}
+                                setSearchQuery={setSearchQuery}
+                                maskedOffset={maskedOffset}
+                                maskedImages={maskedImages}
+                                totalMasked={totalMasked}
+                                isTaskRunning={isTaskRunning}
+                                handleGenerateMasks={handleGenerateMasks}
+                                handleRefreshGallery={handleRefreshGallery}
+                                toggleFilterClass={toggleFilterClass}
+                                hasLabels={hasLabels}
+                                hasMasks={hasMasks}
+                                taskProgress={taskProgress}
+                                setSelectedLightboxImage={setSelectedLightboxImage}
+                                maskedMountUrl={maskedMountUrl}
+                                cacheBuster={cacheBuster}
+                                handleFilterImage={handleFilterImage}
+                                MASKED_LIMIT={MASKED_LIMIT}
+                                handlePageChange={handlePageChange}
+                                verificationScroll={verificationScroll}
+                                setVerificationScroll={setVerificationScroll}
+                            />
                         </section>
                     )}
 
@@ -2497,7 +2036,21 @@ function App() {
                                     <p>Generating comprehensive analytics...</p>
                                 </div>
                             ) : (
-                                <StatsView />
+                                <StatsView
+                                    projectPaths={projectPaths}
+                                    existingDatasets={existingDatasets}
+                                    datasetStats={datasetStats}
+                                    statsPath={statsPath}
+                                    setStatsPath={setStatsPath}
+                                    fetchStats={fetchStats}
+                                    handleExtractEmpty={handleExtractEmpty}
+                                    isTaskRunning={isTaskRunning}
+                                    taskProgress={taskProgress}
+                                    datasetPath={datasetPath}
+                                    projectConfig={projectConfig}
+                                    activeTab={activeTab}
+                                    labelResult={labelResult}
+                                />
                             )}
                         </section>
                     )}
