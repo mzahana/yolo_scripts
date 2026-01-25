@@ -28,7 +28,7 @@ const DatasetSampling = ({
     const fetchClasses = async (path) => {
         setLoadingClasses(true);
         try {
-            const res = await fetch(`http://localhost:8000/api/dataset/classes?path=${encodeURIComponent(path)}`);
+            const res = await fetch(`/api/dataset/classes?path=${encodeURIComponent(path)}`);
             if (res.ok) {
                 const data = await res.json();
                 setClasses(data.classes);
@@ -66,7 +66,7 @@ const DatasetSampling = ({
         };
 
         try {
-            const res = await fetch('http://localhost:8000/api/dataset/sample_task', {
+            const res = await fetch('/api/dataset/sample_task', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)

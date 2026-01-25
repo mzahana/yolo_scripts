@@ -6,7 +6,7 @@ const LightboxModal = ({ selectedLightboxImage, onClose, maskedMountUrl, cacheBu
         <div className="modal-overlay" onClick={onClose} style={{ background: 'rgba(0,0,0,0.9)', zIndex: 2000 }}>
             <div className="lightbox-content" onClick={e => e.stopPropagation()} style={{ position: 'relative', maxWidth: '90vw', maxHeight: '90vh' }}>
                 <img
-                    src={`http://localhost:8000${maskedMountUrl}/${selectedLightboxImage.name}?t=${cacheBuster}`}
+                    src={`${maskedMountUrl}/${selectedLightboxImage.name}?t=${cacheBuster}`}
                     style={{ width: '100%', height: 'auto', borderRadius: '12px', boxShadow: '0 0 40px rgba(0,0,0,0.5)' }}
                     alt="Enlarged"
                 />

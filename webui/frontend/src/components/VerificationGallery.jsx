@@ -192,7 +192,7 @@ const VerificationGallery = ({
                                     onClick={() => setSelectedLightboxImage(img)}
                                 >
                                     <img
-                                        src={`http://localhost:8000${maskedMountUrl}/${img.name}?t=${cacheBuster}`}
+                                        src={`${maskedMountUrl}/${img.name}?t=${cacheBuster}`}
                                         style={{ width: '100%', height: 'auto', display: 'block', transition: 'transform 0.3s' }}
                                         className="gallery-img"
                                         alt={img.name}

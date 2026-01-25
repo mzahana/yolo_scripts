@@ -16,7 +16,7 @@ import VerificationGallery from './components/VerificationGallery';
 import StatsView from './components/StatsView';
 import DatasetSampling from './components/DatasetSampling';
 
-const API_BASE = 'http://localhost:8000/api';
+const API_BASE = '/api';
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
 
 function App() {
@@ -1924,7 +1924,7 @@ function App() {
                                         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', overflow: 'hidden', minHeight: '300px', position: 'relative' }}>
                                             {labelingImages.length > 0 ? (
                                                 <img
-                                                    src={`http://localhost:8000/static/labeling_source/${labelingImages[currentSingleImageIndex]?.name}?t=${cacheBuster}`}
+                                                    src={`/static/labeling_source/${labelingImages[currentSingleImageIndex]?.name}?t=${cacheBuster}`}
                                                     style={{ maxWidth: '100%', maxHeight: '400px', objectFit: 'contain' }}
                                                 />
                                             ) : (
@@ -1962,7 +1962,7 @@ function App() {
                                                 <div className="spinner"></div>
                                             ) : singleLabelResult && singleLabelResult.masked_url ? (
                                                 <img
-                                                    src={`http://localhost:8000${singleLabelResult.masked_url}?t=${cacheBuster}`}
+                                                    src={`${singleLabelResult.masked_url}?t=${cacheBuster}`}
                                                     style={{ maxWidth: '100%', maxHeight: '400px', objectFit: 'contain' }}
                                                 />
                                             ) : (

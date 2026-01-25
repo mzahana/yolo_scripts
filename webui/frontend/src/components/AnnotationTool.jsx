@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 
-const API_BASE = 'http://localhost:8000/api';
+const API_BASE = '/api';
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
 
 const AnnotationTool = ({ datasetPath, onPathChange, samModelPath, setSamModelPath, onBrowse, jumpToImageName, onJumpComplete, onSave }) => {
