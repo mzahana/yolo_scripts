@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-const ProjectLanding = ({ onCreateProject, onLoadProject, onBrowse }) => {
+const ProjectLanding = ({ onCreateProject, onLoadProject, onBrowse, onSkip }) => {
     const [mode, setMode] = useState('landing'); // landing, create, load
     const [createMode, setCreateMode] = useState('standard'); // standard, split
     const [loading, setLoading] = useState(false);
@@ -241,6 +241,24 @@ const ProjectLanding = ({ onCreateProject, onLoadProject, onBrowse }) => {
                 >
                     <span style={{ fontSize: '3rem' }}>📂</span>
                     <span style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>Load Project</span>
+                </button>
+
+                <button
+                    className="glass"
+                    style={{ padding: '30px', width: '200px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '15px', cursor: 'pointer', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.1)' }}
+                    onClick={onSkip}
+                >
+                    <span style={{ fontSize: '3rem' }}>🏋️</span>
+                    <span style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>Train Only</span>
+                </button>
+            </div>
+            <div style={{ marginTop: '20px' }}>
+                <button
+                    className="btn"
+                    style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.2)' }}
+                    onClick={onSkip}
+                >
+                    Skip to Training Mode (No Project)
                 </button>
             </div>
         </div>

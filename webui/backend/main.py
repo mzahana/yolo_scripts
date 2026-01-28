@@ -7,13 +7,16 @@ import cv2
 import numpy as np
 from pathlib import Path
 import yaml
-from typing import List, Optional, Dict, Tuple, Any
+from typing import List, Optional, Dict, Tuple, Any, Union
 import sys
 import threading
 import shutil
 import json
 from datetime import datetime
 from project_manager import ProjectManager
+from training_manager import training_manager
+from export_manager import export_manager
+import torch
 
 # Add the scripts directory to path to import existing logic
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..', '..', 'scripts')))
@@ -2657,6 +2660,129 @@ def sam_predict(request: SAMPredictRequest):
         raise HTTPException(status_code=500, detail=f"SAM Inference error: {e}")
 
 
+
+# -------------------------------------------------------------------------
+# Training Endpoints
+# -------------------------------------------------------------------------
+
+class TrainingConfig(BaseModel):
+    model: str = "yolov8n.pt"
+    data: str
+    epochs: int = 100
+    batch: Union[int, float] = 16 # Supports int or float (though usually int) or -1
+    imgsz: int = 640
+    device: Optional[str] = None
+    workers: int = 8
+    project: Optional[str] = None
+    name: Optional[str] = None
+    exist_ok: bool = False
+    optimizer: str = "auto"
+    verbose: bool = True
+    seed: int = 0
+    deterministic: bool = True
+    single_cls: bool = False
+    rect: bool = False
+    cos_lr: bool = False
+    close_mosaic: int = 10
+    resume: bool = False
+    amp: bool = True
+    fraction: float = 1.0
+    profile: bool = False
+    freeze: Optional[int] = None
+    # Add generic overrides
+    overrides: Optional[Dict[str, Any]] = None
+
+class ExportConfig(BaseModel):
+    model: str
+    format: str
+    imgsz: Union[int, List[int]] = 640
+    batch: int = 1
+    device: Optional[str] = None
+    half: bool = False
+    int8: bool = False
+    dynamic: bool = False
+    simplify: bool = False
+    opset: Optional[int] = None
+    workspace: Optional[int] = None # GB
+    nms: bool = False
+    data: Optional[str] = None # Required for INT8 calibration
+    overrides: Optional[Dict[str, Any]] = None
+
+@app.get("/api/training/models")
+def get_training_models():
+    """Return list of featured models supported by Ultralytics."""
+    return {
+        "YOLOv8": ["yolov8n", "yolov8s", "yolov8m", "yolov8l", "yolov8x"],
+        "YOLOv9": ["yolov9t", "yolov9s", "yolov9m", "yolov9c", "yolov9e"],
+        "YOLOv10": ["yolov10n", "yolov10s", "yolov10m", "yolov10b", "yolov10l", "yolov10x"],
+        "YOLO11": ["yolo11n", "yolo11s", "yolo11m", "yolo11l", "yolo11x"],
+        "YOLOv5": ["yolov5n", "yolov5s", "yolov5m", "yolov5l", "yolov5x"],
+        "YOLO26": ["yolo26n", "yolo26s", "yolo26m", "yolo26l", "yolo26x"]
+    }
+
+@app.get("/api/training/devices")
+def get_training_devices():
+    """Return list of available devices (CPU + GPUs)."""
+    devices = [{"id": "cpu", "name": "CPU"}]
+    
+    if torch.cuda.is_available():
+        count = torch.cuda.device_count()
+        for i in range(count):
+            try:
+                name = torch.cuda.get_device_name(i)
+                devices.append({"id": str(i), "name": f"GPU {i}: {name}"})
+            except:
+                devices.append({"id": str(i), "name": f"GPU {i}"})
+                
+    return devices
+
+@app.post("/api/training/start")
+def start_training(config: TrainingConfig):
+    # Flatten config to dict for ultralytics
+    # Handle 'overrides'
+    base_config = config.dict(exclude={"overrides"})
+    
+    # Merge overrides if any
+    final_config = base_config.copy()
+    if config.overrides:
+        final_config.update(config.overrides)
+        
+    try:
+        return training_manager.start_training(final_config)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/training/stop")
+def stop_training():
+    return training_manager.stop_training()
+
+@app.get("/api/training/status")
+def get_training_status():
+    return training_manager.get_state()
+
+@app.post("/api/export/start")
+def start_export(config: ExportConfig):
+    # Flatten config to dict for ultralytics
+    # Handle 'overrides'
+    base_config = config.dict(exclude={"overrides"})
+    
+    # Merge overrides if any
+    final_config = base_config.copy()
+    if config.overrides:
+        final_config.update(config.overrides)
+        
+    try:
+        return export_manager.start_export(final_config)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/export/stop")
+def stop_export():
+    return export_manager.stop_export()
+
+@app.get("/api/export/status")
+def get_export_status():
+    return export_manager.get_state()
 
 if __name__ == "__main__":
     import uvicorn

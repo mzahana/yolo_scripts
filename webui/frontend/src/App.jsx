@@ -15,6 +15,7 @@ import LightboxModal from './components/LightboxModal';
 import VerificationGallery from './components/VerificationGallery';
 import StatsView from './components/StatsView';
 import DatasetSampling from './components/DatasetSampling';
+import TrainingView from './components/TrainingView';
 
 const API_BASE = '/api';
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
@@ -54,7 +55,9 @@ function App() {
     const [searchQuery, setSearchQuery] = useState('');
     const [projectConfig, setProjectConfig] = useState(null);
     const [projectPaths, setProjectPaths] = useState(null);
+    const [isStandalone, setIsStandalone] = useState(false);
     const [landingCallback, setLandingCallback] = useState(null);
+    const [trainingCallback, setTrainingCallback] = useState(null);
     const MASKED_LIMIT = 20;
 
     // Lightbox & Stats State
@@ -81,6 +84,8 @@ function App() {
         { type: 'header', label: 'ANALYSIS' },
         { id: 'verification', label: 'Data Inspection', icon: '✅' },
         { id: 'stats', label: 'Statistics', icon: '📊' },
+        { type: 'header', label: 'TRAINING' },
+        { id: 'training', label: 'Train Model', icon: '🏋️' },
     ]);
     const [newDatasetName, setNewDatasetName] = useState('dataset_v1');
     const [datasetStrategy, setDatasetStrategy] = useState('all');
@@ -608,6 +613,16 @@ function App() {
         openFileBrowser('landing_generic', type);
     };
 
+    const handleTrainingBrowse = (target, type, cb) => {
+        setTrainingCallback(() => cb);
+        openFileBrowser('training_generic', type);
+    };
+
+    const openTrainingBrowser = (type, cb) => {
+        setTrainingCallback(() => cb);
+        openFileBrowser('training_generic', type === 'model' ? 'file' : 'dir');
+    };
+
     // File Browser Logic
     const openFileBrowser = (target, type, index = -1) => {
         setBrowserTarget(target);
@@ -648,6 +663,7 @@ function App() {
         } else if (browserType === 'file') {
             if (browserTarget === 'model') setModelPath(item.path);
             else if (browserTarget === 'sam_model') setSamModelPath(item.path);
+            else if (browserTarget === 'training_generic' && trainingCallback) trainingCallback(item.path);
             setShowFileBrowser(false);
         }
     };
@@ -671,6 +687,9 @@ function App() {
             else if (browserTarget === 'landing_generic') {
                 if (landingCallback) landingCallback(browserPath);
             }
+            else if (browserTarget === 'training_generic') {
+                if (trainingCallback) trainingCallback(browserPath);
+            }
         }
         setShowFileBrowser(false);
     };
@@ -690,6 +709,7 @@ function App() {
                             {browserTarget === 'extract_source' && 'Select Labeled Dataset'}
                             {browserTarget === 'extract_output' && 'Select Extraction Output'}
                             {browserTarget === 'landing_generic' && 'Select Folder'}
+                            {browserTarget === 'training_generic' && 'Select'}
 
                         </h3>
                         <button className="browse-btn" onClick={() => setShowFileBrowser(false)}>Close</button>
@@ -1179,12 +1199,16 @@ function App() {
 
     return (
         <div className="app-wrapper">
-            {(!projectConfig) && (
+            {(!projectConfig && !isStandalone) && (
                 <div style={{ position: 'absolute', inset: 0, zIndex: 100, background: '#111827' }}>
                     <ProjectLanding
                         onCreateProject={handleCreateProject}
                         onLoadProject={handleLoadProject}
                         onBrowse={handleLandingBrowse}
+                        onSkip={() => {
+                            setIsStandalone(true);
+                            setActiveTab('training');
+                        }}
                     />
                     {showFileBrowser && <FileBrowserModal />}
                 </div>
@@ -2053,6 +2077,14 @@ function App() {
                                 />
                             )}
                         </section>
+                    )}
+                    {activeTab === 'training' && (
+                        <div style={{ height: 'calc(100vh - 40px)', overflow: 'hidden' }}>
+                            <TrainingView
+                                datasetPath={projectPaths?.processed || datasetPath} // Fallback to datasetPath
+                                onBrowse={handleTrainingBrowse}
+                            />
+                        </div>
                     )}
                 </div>
             </main >
