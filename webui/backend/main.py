@@ -2329,19 +2329,39 @@ def list_fs(path: str = "/", only_dirs: bool = False):
                 raise HTTPException(status_code=404, detail="Path not found")
 
         items = []
-        # Sort so directories come first
-        for entry in sorted(os.scandir(p), key=lambda e: (not e.is_dir(), e.name.lower())):
-            if only_dirs and not entry.is_dir():
-                continue
-            
-            # For model selection, we might want to see .pt files
-            # For now, let's just show all or just dirs
-            items.append({
-                "name": entry.name,
-                "path": str(Path(entry.path).absolute()),
-                "is_dir": entry.is_dir(),
-                "size": entry.stat().st_size if not entry.is_dir() else 0
-            })
+        
+        # Safe iteration and collection
+        with os.scandir(p) as entries:
+            for entry in entries:
+                try:
+                    # Robust check for directory
+                    try:
+                        is_dir = entry.is_dir()
+                    except OSError:
+                        continue # Skip unreadable
+
+                    if only_dirs and not is_dir:
+                        continue
+                    
+                    # Robust size retrieval
+                    size = 0
+                    if not is_dir:
+                        try:
+                            size = entry.stat().st_size
+                        except (FileNotFoundError, PermissionError, OSError):
+                            size = 0 
+                    
+                    items.append({
+                        "name": entry.name,
+                        "path": str(Path(entry.path).absolute()),
+                        "is_dir": is_dir,
+                        "size": size
+                    })
+                except Exception:
+                    continue
+        
+        # Sort safe items: Directories first, then alphabetical
+        items.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
 
         return {
             "current_path": str(p.absolute()),
