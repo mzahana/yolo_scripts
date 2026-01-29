@@ -16,6 +16,7 @@ import VerificationGallery from './components/VerificationGallery';
 import StatsView from './components/StatsView';
 import DatasetSampling from './components/DatasetSampling';
 import TrainingView from './components/TrainingView';
+import DatasetToolsPage from './pages/DatasetToolsPage';
 
 const API_BASE = '/api';
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
@@ -1565,406 +1566,51 @@ function App() {
                     )}
 
                     {activeTab === 'processing' && (
-                        <section className="glass section-card">
-                            <div className="section-title">Data Processing: Merge Datasets</div>
-                            <p style={{ opacity: 0.7, marginBottom: '25px', fontSize: '0.9rem' }}>
-                                Consolidate multiple labeled datasets into one. Class labels will be merged and remapped automatically.
-                            </p>
-
-                            <div className="input-group">
-                                <label>Source Datasets (folders containing data.yaml, images, and labels)</label>
-                                {mergeSources.map((path, idx) => (
-                                    <div key={idx} style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
-                                        <input
-                                            type="text"
-                                            placeholder="/path/to/labeled/dataset"
-                                            value={path}
-                                            onChange={(e) => {
-                                                const next = [...mergeSources];
-                                                next[idx] = e.target.value;
-                                                setMergeSources(next);
-                                            }}
-                                            style={{ flex: 1 }}
-                                        />
-                                        <button className="browse-btn" onClick={() => openFileBrowser('merge_source', 'dir', idx)}>
-                                            Browse
-                                        </button>
-                                        <button
-                                            className="browse-btn"
-                                            style={{ color: '#ef4444' }}
-                                            onClick={() => removeMergeSource(idx)}
-                                            disabled={mergeSources.length === 1}
-                                        >
-                                            ✕
-                                        </button>
-                                    </div>
-                                ))}
-                                <button
-                                    className="btn"
-                                    style={{ background: 'rgba(240, 239, 239, 0.81)', padding: '10px', fontSize: '0.85rem' }}
-                                    onClick={addMergeSource}
-                                >
-                                    + Add Another Dataset
-                                </button>
-                            </div>
-
-                            <div className="input-group" style={{ marginTop: '30px' }}>
-                                <label>Output Consolidated Dataset Path</label>
-                                <div style={{ display: 'flex', gap: '10px' }}>
-                                    <input
-                                        type="text"
-                                        placeholder="/path/to/merged/output"
-                                        value={mergeOutput}
-                                        onChange={(e) => setMergeOutput(e.target.value)}
-                                        style={{ flex: 1 }}
-                                    />
-                                    <button className="browse-btn" onClick={() => openFileBrowser('merge_output', 'dir')}>
-                                        Browse
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div style={{ marginTop: '40px' }}>
-                                <button
-                                    className="btn btn-primary"
-                                    onClick={handleMerge}
-                                    disabled={isTaskRunning}
-                                    style={{ width: '100%', padding: '15px' }}
-                                >
-                                    🚀 Start Merging Datasets
-                                </button>
-                                <ProgressBar progress={taskProgress} type="merging" />
-                            </div>
-
-                            {/* Extraction Section */}
-                            <div style={{ marginTop: '50px', paddingTop: '40px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
-                                <div className="section-title">Extraction: Extract Images by Class</div>
-                                <p style={{ opacity: 0.7, marginBottom: '25px', fontSize: '0.9rem' }}>
-                                    Search a labeled dataset and extract all images containing specific classes into a new folder.
-                                </p>
-
-                                <div className="input-group">
-                                    <label>Source Labeled Dataset Path</label>
-                                    <div style={{ display: 'flex', gap: '10px' }}>
-                                        <input
-                                            type="text"
-                                            placeholder="/path/to/labeled/dataset"
-                                            value={extractSource}
-                                            onChange={(e) => setExtractSource(e.target.value)}
-                                            style={{ flex: 1 }}
-                                        />
-                                        <button className="browse-btn" onClick={() => openFileBrowser('extract_source', 'dir')}>
-                                            Browse
-                                        </button>
-                                        <button className="btn btn-primary" onClick={handleFetchClasses} style={{ padding: '0 15px' }}>
-                                            Fetch Classes
-                                        </button>
-                                    </div>
-                                </div>
-
-                                {availableClasses.length > 0 && (<>
-                                    <div className="input-group" style={{ marginTop: '20px' }}>
-                                        <label>Select Classes to Extract</label>
-                                        <div style={{
-                                            display: 'grid',
-                                            gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
-                                            gap: '10px',
-                                            maxHeight: '200px',
-                                            overflowY: 'auto',
-                                            padding: '15px',
-                                            background: 'rgba(255,255,255,0.03)',
-                                            borderRadius: '8px'
-                                        }}>
-                                            {availableClasses.map((cls, i) => (
-                                                <label key={i} style={{
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    gap: '10px',
-                                                    cursor: 'pointer',
-                                                    fontSize: '0.9rem',
-                                                    padding: '5px',
-                                                    background: selectedClasses.includes(cls) ? 'rgba(79, 70, 229, 0.1)' : 'transparent',
-                                                    borderRadius: '4px'
-                                                }}>
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={selectedClasses.includes(cls)}
-                                                        onChange={() => toggleClass(cls)}
-                                                    />
-                                                    <span onClick={(e) => { e.preventDefault(); toggleFilterClass(cls); }}>
-                                                        {cls}
-                                                    </span>
-                                                </label>
-                                            ))}
-                                        </div>
-                                    </div>
-                                    <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end', gap: '15px' }}>
-                                        <button
-                                            className="btn btn-primary"
-                                            onClick={handleExtract}
-                                            disabled={isTaskRunning || selectedClasses.length === 0}
-                                        >
-                                            Extract Images
-                                        </button>
-                                    </div>
-                                </>)}
-
-                                <div className="input-group" style={{ marginTop: '30px' }}>
-                                    <label>Output Directory</label>
-                                    <div style={{ display: 'flex', gap: '10px' }}>
-                                        <input
-                                            type="text"
-                                            placeholder="/path/to/extracted/output"
-                                            value={extractOutput}
-                                            onChange={(e) => setExtractOutput(e.target.value)}
-                                            style={{ flex: 1 }}
-                                        />
-                                        <button className="browse-btn" onClick={() => openFileBrowser('extract_output', 'dir')}>
-                                            Browse
-                                        </button>
-                                    </div>
-                                </div>
-
-
-                                <div style={{ marginTop: '40px' }}>
-                                    <button
-                                        className="btn btn-primary"
-                                        onClick={handleExtract}
-                                        disabled={isTaskRunning || selectedClasses.length === 0}
-                                        style={{ width: '100%', padding: '15px' }}
-                                    >
-                                        📦 Extract Matching Images
-                                    </button>
-                                    <ProgressBar progress={taskProgress} type="extracting" />
-
-                                    {taskProgress?.status === 'idle' && taskProgress?.result?.extracted_count !== undefined && (
-                                        <div className="glass" style={{
-                                            marginTop: '20px',
-                                            padding: '15px',
-                                            borderLeft: '4px solid #10b981',
-                                            background: 'rgba(16, 185, 129, 0.05)'
-                                        }}>
-                                            <div style={{ fontWeight: 'bold', color: '#10b981', marginBottom: '5px' }}>Extraction Successful!</div>
-                                            <div style={{ fontSize: '0.9rem', opacity: 0.9 }}>
-                                                Extracted <strong>{taskProgress.result.extracted_count}</strong> images out of {taskProgress.result.total_scanned} scanned.
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-
-                            {/* Re-balance Section */}
-                            <div style={{ marginTop: '50px', paddingTop: '40px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
-                                <div className="section-title">Dataset Splits: Re-balance</div>
-                                <p style={{ opacity: 0.7, marginBottom: '25px', fontSize: '0.9rem' }}>
-                                    Re-distribute images between Train, Validation, and Test sets.
-                                </p>
-
-                                <div className="input-group">
-                                    <label>Dataset to Re-balance</label>
-                                    <div style={{ display: 'flex', gap: '10px' }}>
-                                        <input
-                                            type="text"
-                                            placeholder="/path/to/dataset"
-                                            value={rebalanceInput}
-                                            onChange={(e) => setRebalanceInput(e.target.value)}
-                                            onBlur={() => { if (rebalanceInput) fetchRebalanceStats(rebalanceInput); }}
-                                            style={{ flex: 1 }}
-                                        />
-                                        <button className="browse-btn" onClick={() => openFileBrowser('rebalance_input', 'dir')}>
-                                            Browse
-                                        </button>
-                                    </div>
-                                </div>
-
-                                {rebalanceStats && (
-                                    <div className="glass p-card" style={{ marginTop: '20px', padding: '15px', background: 'rgba(255,255,255,0.03)' }}>
-                                        <div style={{ fontWeight: 'bold', marginBottom: '10px', fontSize: '0.9rem' }}>Current Splits:</div>
-                                        <div style={{ display: 'flex', gap: '20px', fontSize: '0.85rem' }}>
-                                            <span>Total: {rebalanceStats.total} images</span>
-                                            {Object.entries(rebalanceStats.splits).map(([k, v]) => (
-                                                <span key={k} style={{ color: 'var(--text-muted)' }}>
-                                                    {k}: {v.count} ({v.percentage}%)
-                                                </span>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-
-                                <div className="input-group" style={{ marginTop: '20px' }}>
-                                    <label>New Split Ratios (%)</label>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
-                                        <div>
-                                            <span style={{ fontSize: '0.8rem', opacity: 0.7 }}>Train</span>
-                                            <input
-                                                type="number"
-                                                value={newRebalancePcts.train}
-                                                onChange={(e) => setNewRebalancePcts({ ...newRebalancePcts, train: parseInt(e.target.value) || 0 })}
-                                            />
-                                        </div>
-                                        <div>
-                                            <span style={{ fontSize: '0.8rem', opacity: 0.7 }}>Val</span>
-                                            <input
-                                                type="number"
-                                                value={newRebalancePcts.val}
-                                                onChange={(e) => setNewRebalancePcts({ ...newRebalancePcts, val: parseInt(e.target.value) || 0 })}
-                                            />
-                                        </div>
-                                        <div>
-                                            <span style={{ fontSize: '0.8rem', opacity: 0.7 }}>Test</span>
-                                            <input
-                                                type="number"
-                                                value={newRebalancePcts.test}
-                                                onChange={(e) => setNewRebalancePcts({ ...newRebalancePcts, test: parseInt(e.target.value) || 0 })}
-                                            />
-                                        </div>
-                                    </div>
-
-                                    {(newRebalancePcts.train + newRebalancePcts.val + newRebalancePcts.test) !== 100 && (
-                                        <div style={{ color: '#ef4444', fontSize: '0.8rem', marginTop: '5px' }}>
-                                            Total: {newRebalancePcts.train + newRebalancePcts.val + newRebalancePcts.test}% (Must be 100%)
-                                        </div>
-                                    )}
-                                </div>
-
-                                <div className="input-group" style={{ marginTop: '20px' }}>
-                                    <label className="checkbox-container">
-                                        <input
-                                            type="checkbox"
-                                            checked={deleteOriginalRebalance}
-                                            onChange={(e) => setDeleteOriginalRebalance(e.target.checked)}
-                                        />
-                                        <span className="checkmark"></span>
-                                        <span style={{ marginLeft: '10px' }}>Delete Original Dataset (Replace in-place)</span>
-                                    </label>
-                                    <div style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '5px' }}>
-                                        {deleteOriginalRebalance
-                                            ? "Warning: The original folder will be replaced by the re-balanced version."
-                                            : "A new folder will be created (e.g., dataset_rebalanced)."}
-                                    </div>
-                                </div>
-
-                                <button
-                                    className="btn btn-primary"
-                                    style={{ marginTop: '20px' }}
-                                    onClick={handleRebalance}
-                                    disabled={isTaskRunning || (newRebalancePcts.train + newRebalancePcts.val + newRebalancePcts.test) !== 100}
-                                >
-                                    Re-balance Splits
-                                </button>
-                            </div>
-
-                            {/* Flatten Dataset Section */}
-                            <div style={{ marginTop: '50px', paddingTop: '40px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
-                                <div className="section-title">Dataset Tools: Flatten</div>
-                                <p style={{ opacity: 0.7, marginBottom: '25px', fontSize: '0.9rem' }}>
-                                    Convert a split dataset (train/val/test) into a flat structure (images/labels).
-                                </p>
-
-                                <div className="input-group">
-                                    <label>Dataset to Flatten</label>
-                                    <div style={{ display: 'flex', gap: '10px' }}>
-                                        <input
-                                            type="text"
-                                            placeholder="/path/to/dataset"
-                                            value={flattenInput}
-                                            onChange={(e) => setFlattenInput(e.target.value)}
-                                            style={{ flex: 1 }}
-                                        />
-                                        <button className="browse-btn" onClick={() => openFileBrowser('flatten_input', 'dir')}>
-                                            Browse
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <button
-                                    className="btn btn-primary"
-                                    onClick={handleFlatten}
-                                    disabled={isTaskRunning || !flattenInput}
-                                    style={{ marginTop: '20px' }}
-                                >
-                                    Flatten Dataset
-                                </button>
-                            </div>
-
-
-
-
-
-                            {/* Split Dataset Section */}
-                            <div style={{ marginTop: '50px', paddingTop: '40px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
-                                <div className="section-title">Split: Divide a dataset into splits</div>
-                                <p style={{ opacity: 0.7, marginBottom: '25px', fontSize: '0.9rem' }}>
-                                    Split a dataset into multiple equal parts (in the same directory you enter).
-                                </p>
-
-                                <div className="input-group">
-                                    <label>Dataset to Split</label>
-                                    <div style={{ display: 'flex', gap: '10px' }}>
-                                        <input
-                                            type="text"
-                                            placeholder="/path/to/dataset"
-                                            value={splitInput}
-                                            onChange={(e) => setSplitInput(e.target.value)}
-                                            style={{ flex: 1 }}
-                                        />
-                                        <button className="browse-btn" onClick={() => openFileBrowser('split_input', 'dir')}>
-                                            Browse
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <div className="input-group">
-                                    <label>Number of Splits</label>
-                                    <input
-                                        type="number"
-                                        min="2"
-                                        value={splitCount}
-                                        onChange={(e) => setSplitCount(e.target.value)}
-                                        style={{ width: '100px' }}
-                                    />
-                                </div>
-
-                                <div style={{ marginTop: '30px' }}>
-                                    <button
-                                        className="btn btn-primary"
-                                        onClick={handleSplit}
-                                        disabled={isTaskRunning}
-                                        style={{ width: '100%', padding: '15px' }}
-                                    >
-                                        ✂️ Split Dataset
-                                    </button>
-                                    <ProgressBar progress={taskProgress} type="splitting" />
-
-                                    {taskProgress?.status === 'idle' && taskProgress?.result?.processed_count !== undefined && (
-                                        <div className="glass" style={{
-                                            marginTop: '20px',
-                                            padding: '15px',
-                                            borderLeft: '4px solid #10b981',
-                                            background: 'rgba(16, 185, 129, 0.05)'
-                                        }}>
-                                            <div style={{ fontWeight: 'bold', color: '#10b981', marginBottom: '5px' }}>Split Successful!</div>
-                                            <div style={{ fontSize: '0.9rem', opacity: 0.9 }}>
-                                                Processed <strong>{taskProgress.result.processed_count}</strong> images.
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                            <div style={{ height: '30px' }}></div>
-
-                            <DatasetSampling
-                                initialPath={datasetPath}
-                                projectConfig={projectConfig}
-                                onBrowse={handleLandingBrowse}
-                                showNotification={showNotification}
-                                isTaskRunning={isTaskRunning}
-                                taskProgress={taskProgress}
-                                onStartTask={() => setIsTaskRunning(true)}
-                            />
-                        </section >
-                    )
-                    }
+                        <DatasetToolsPage
+                            mergeSources={mergeSources}
+                            setMergeSources={setMergeSources}
+                            addMergeSource={addMergeSource}
+                            removeMergeSource={removeMergeSource}
+                            mergeOutput={mergeOutput}
+                            setMergeOutput={setMergeOutput}
+                            handleMerge={handleMerge}
+                            extractSource={extractSource}
+                            setExtractSource={setExtractSource}
+                            availableClasses={availableClasses}
+                            selectedClasses={selectedClasses}
+                            handleFetchClasses={handleFetchClasses}
+                            toggleClass={toggleClass}
+                            toggleFilterClass={toggleFilterClass}
+                            extractOutput={extractOutput}
+                            setExtractOutput={setExtractOutput}
+                            handleExtract={handleExtract}
+                            rebalanceInput={rebalanceInput}
+                            setRebalanceInput={setRebalanceInput}
+                            rebalanceStats={rebalanceStats}
+                            newRebalancePcts={newRebalancePcts}
+                            setNewRebalancePcts={setNewRebalancePcts}
+                            deleteOriginalRebalance={deleteOriginalRebalance}
+                            setDeleteOriginalRebalance={setDeleteOriginalRebalance}
+                            handleRebalance={handleRebalance}
+                            fetchRebalanceStats={fetchRebalanceStats}
+                            flattenInput={flattenInput}
+                            setFlattenInput={setFlattenInput}
+                            handleFlatten={handleFlatten}
+                            splitInput={splitInput}
+                            setSplitInput={setSplitInput}
+                            splitCount={splitCount}
+                            setSplitCount={setSplitCount}
+                            handleSplit={handleSplit}
+                            datasetPath={datasetPath}
+                            projectConfig={projectConfig}
+                            handleLandingBrowse={handleLandingBrowse}
+                            isTaskRunning={isTaskRunning}
+                            taskProgress={taskProgress}
+                            openFileBrowser={openFileBrowser}
+                            setIsTaskRunning={setIsTaskRunning}
+                            showNotification={showNotification}
+                        />
+                    )}
 
                     {
                         activeTab === 'preprocess' && (
