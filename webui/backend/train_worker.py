@@ -1,16 +1,36 @@
 import sys
 import json
 import argparse
+import os
+from pathlib import Path
 from ultralytics import YOLO
 import threading
 
 def run_training(config):
     print(f"Starting training with config: {config}")
     try:
+        # Change CWD to dataset directory so checks/downloads happen there
+        data_config_path = config.get("data")
+        if data_config_path:
+            try:
+                # data_config_path is likely /path/to/dataset/data.yaml
+                dataset_dir = Path(data_config_path).parent.absolute()
+                print(f"Changing working directory to: {dataset_dir}")
+                os.chdir(dataset_dir)
+            except Exception as e:
+                print(f"Warning: Failed to change working directory to dataset path: {e}")
+
         # Load model (pretrained or custom)
         model_name = config.get("model", "yolov8n.pt")
         # If it's a path to a file that exists, use it. Otherwise assume it's a model name downloaded by ultralytics
+        print(f"Loading using model: {model_name}")
         model = YOLO(model_name)
+        
+        # Verify model path if possible
+        if Path(model_name).exists():
+             print(f"Model file confirm at: {Path(model_name).absolute()}")
+        else:
+             print(f"Model '{model_name}' (pretrained) will be downloaded to: {os.getcwd()}")
 
         # Prepare arguments
         # Filter out arguments that are not for training or handled separately
@@ -18,6 +38,8 @@ def run_training(config):
         
         # Ensure project and name are set if not provided, to keep results organized
         if "project" not in train_args:
+            # If project is relative, it will now be relative to the NEW CWD (dataset dir)
+            # which is what we want (e.g. runs/detect inside dataset dir)
             train_args["project"] = "runs/detect"
         if "name" not in train_args:
             train_args["name"] = "train"

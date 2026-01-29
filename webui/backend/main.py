@@ -16,6 +16,7 @@ from datetime import datetime
 from project_manager import ProjectManager
 from training_manager import training_manager
 from export_manager import export_manager
+from dataset_tools_manager import DatasetToolsManager
 import torch
 
 # Add the scripts directory to path to import existing logic
@@ -157,6 +158,18 @@ class UpdateConfigRequest(BaseModel):
     path: str
     updates: Dict[str, Any]
 
+class SplitStatsRequest(BaseModel):
+    dataset_path: str
+
+class RebalanceRequest(BaseModel):
+    dataset_path: str
+    train_pct: float
+    val_pct: float
+    test_pct: float
+    delete_original: bool = False
+
+class FlattenRequest(BaseModel):
+    dataset_path: str
 
 
 def find_project_root(path: Path) -> Path:
@@ -669,6 +682,37 @@ def get_dataset_status(path: str):
         "has_masks": has_masks,
         "config": config
     }
+
+@app.post("/api/dataset/split-stats")
+def get_split_stats(request: SplitStatsRequest):
+    try:
+        return DatasetToolsManager.get_split_stats(request.dataset_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/dataset/rebalance")
+def rebalance_dataset(request: RebalanceRequest):
+    try:
+        return DatasetToolsManager.rebalance_dataset(
+            request.dataset_path, 
+            request.train_pct, 
+            request.val_pct, 
+            request.test_pct, 
+            request.delete_original
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/dataset/flatten")
+def flatten_dataset(request: FlattenRequest):
+    try:
+        return DatasetToolsManager.flatten_dataset(request.dataset_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/dataset/sample")
 def get_sample_image(path: str):

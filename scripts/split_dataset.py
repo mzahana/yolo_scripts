@@ -217,6 +217,26 @@ class YOLODatasetSplitter:
 
         return labels_copied
 
+    def _load_source_yaml_info(self) -> Dict:
+        """Attempt to load nc and names from a source data.yaml if it exists."""
+        source_yaml = self.parent_dir / 'data.yaml'
+        if not source_yaml.exists():
+            # Try parent if we are in a split folder structure
+            source_yaml = self.parent_dir.parent / 'data.yaml'
+        
+        if source_yaml.exists():
+            try:
+                import yaml
+                with open(source_yaml, 'r') as f:
+                    data = yaml.safe_load(f)
+                    return {
+                        'nc': data.get('nc'),
+                        'names': data.get('names')
+                    }
+            except Exception as e:
+                print(f"Warning: Could not load source data.yaml: {e}")
+        return {}
+
     def generate_yaml_config(self, num_classes: int = None):
         """Generate YOLO configuration YAML file rooted at the output directory."""
         yaml_content = {
@@ -226,36 +246,82 @@ class YOLODatasetSplitter:
             'test':  'test/images',
         }
 
-        if num_classes is None:
-            num_classes = self._detect_num_classes()
+        # Priority 1: Use provided num_classes (arg)
+        # Priority 2: Use information from source data.yaml
+        # Priority 3: Detect from label files
+        
+        source_info = self._load_source_yaml_info()
+        
+        final_nc = num_classes
+        final_names = None
 
-        if num_classes:
-            yaml_content['nc'] = num_classes
-            yaml_content['names'] = [f'class_{i}' for i in range(num_classes)]
+        if final_nc is None:
+             final_nc = source_info.get('nc')
+        
+        if source_info.get('names'):
+            final_names = source_info.get('names')
+            # If names provided but nc not, deduce nc
+            if final_nc is None:
+                final_nc = len(final_names)
+
+        # Fallback detection if still None
+        if final_nc is None:
+            print("Detecting classes from labels...")
+            final_nc = self._detect_num_classes()
+
+        if final_nc:
+            yaml_content['nc'] = final_nc
+            # If names available from source, use them. Otherwise generate placeholders.
+            if final_names:
+                # Ensure length matches nc
+                if len(final_names) != final_nc:
+                    print(f"Warning: Source class names count ({len(final_names)}) does not match nc ({final_nc}).")
+                    # Should we resize? Stick to names list usually.
+                    # If names < nc, extend.
+                    if len(final_names) < final_nc:
+                        final_names.extend([f'class_{i}' for i in range(len(final_names), final_nc)])
+                    else:
+                        final_names = final_names[:final_nc]
+                yaml_content['names'] = final_names
+            else:
+                 yaml_content['names'] = [f'class_{i}' for i in range(final_nc)]
 
         yaml_path = self.output_root / 'data.yaml'
         try:
-            import yaml  # optional
+            import yaml
             with open(yaml_path, 'w') as f:
                 yaml.dump(yaml_content, f, default_flow_style=False, sort_keys=False)
             print(f"\nGenerated YOLO config file: {yaml_path}")
         except ImportError:
-            # Fallback to simple text if PyYAML is not installed
+            # Fallback
             with open(yaml_path, 'w') as f:
                 f.write(f"# YOLO Dataset Configuration\n")
-                f.write(f"path: {yaml_content['path']}\n")
-                f.write(f"train: {yaml_content['train']}\n")
-                f.write(f"val: {yaml_content['val']}\n")
-                f.write(f"test: {yaml_content['test']}\n")
-                if num_classes:
-                    f.write(f"nc: {num_classes}\n")
-                    f.write(f"names: {yaml_content['names']}\n")
+                for k, v in yaml_content.items():
+                    f.write(f"{k}: {v}\n")
             print(f"\nGenerated YOLO config file (simple format): {yaml_path}")
 
     def _detect_num_classes(self) -> int:
-        """Detect number of classes from label files (samples up to 100)."""
+        """Detect number of classes from ALL label files."""
         max_class = -1
-        label_files = list(self.labels_dir.glob('*.txt'))[:100]
+        # Scan ALL label files instead of just first 100 to ensure we catch rare classes
+        label_files = list(self.labels_dir.glob('*.txt'))
+        if self.is_already_split:
+            for split in ['train', 'valid', 'test', 'val']:
+                d = self.parent_dir / split / 'labels'
+                if d.exists():
+                    label_files.extend(list(d.glob('*.txt')))
+
+        # Remove duplicates if any (though glob paths are unique)
+        label_files = list(set(label_files))
+
+        if not label_files:
+             return None
+
+        # To avoid being too slow on massive datasets, maybe limit to 1000 or 5000? 
+        # But user wants correctness. Let's scan all but be efficient.
+        # Check every 10th file if > 1000 files?
+        if len(label_files) > 5000:
+             label_files = label_files[::5] # 20% sample
 
         for label_file in label_files:
             try:
@@ -263,9 +329,13 @@ class YOLODatasetSplitter:
                     for line in f:
                         parts = line.strip().split()
                         if parts:
-                            class_id = int(parts[0])
-                            max_class = max(max_class, class_id)
-            except (ValueError, IndexError):
+                            try:
+                                class_id = int(parts[0])
+                                if class_id > max_class:
+                                    max_class = class_id
+                            except ValueError:
+                                pass
+            except Exception:
                 continue
 
         return max_class + 1 if max_class >= 0 else None

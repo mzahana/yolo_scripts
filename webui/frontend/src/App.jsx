@@ -112,6 +112,15 @@ function App() {
     const [splitInput, setSplitInput] = useState('');
     const [splitCount, setSplitCount] = useState(2);
 
+    // Rebalance State
+    const [rebalanceInput, setRebalanceInput] = useState('');
+    const [rebalanceStats, setRebalanceStats] = useState(null);
+    const [newRebalancePcts, setNewRebalancePcts] = useState({ train: 70, val: 20, test: 10 });
+    const [deleteOriginalRebalance, setDeleteOriginalRebalance] = useState(false);
+
+    // Flatten State
+    const [flattenInput, setFlattenInput] = useState('');
+
     // Verification Filtering
     const [filterClasses, setFilterClasses] = useState([]);
 
@@ -684,6 +693,11 @@ function App() {
             else if (browserTarget === 'extract_output') setExtractOutput(browserPath);
             else if (browserTarget === 'extract_output') setExtractOutput(browserPath);
             else if (browserTarget === 'split_input') setSplitInput(browserPath);
+            else if (browserTarget === 'rebalance_input') {
+                setRebalanceInput(browserPath);
+                fetchRebalanceStats(browserPath);
+            }
+            else if (browserTarget === 'flatten_input') setFlattenInput(browserPath);
             else if (browserTarget === 'landing_generic') {
                 if (landingCallback) landingCallback(browserPath);
             }
@@ -708,6 +722,7 @@ function App() {
                             {browserTarget === 'merge_output' && 'Select Output Directory'}
                             {browserTarget === 'extract_source' && 'Select Labeled Dataset'}
                             {browserTarget === 'extract_output' && 'Select Extraction Output'}
+                            {browserTarget === 'rebalance_input' && 'Select Dataset to Re-balance'}
                             {browserTarget === 'landing_generic' && 'Select Folder'}
                             {browserTarget === 'training_generic' && 'Select'}
 
@@ -990,6 +1005,74 @@ function App() {
         }
     };
 
+    const fetchRebalanceStats = async (path) => {
+        try {
+            const res = await axios.post(`${API_BASE}/dataset/split-stats`, { dataset_path: path });
+            setRebalanceStats(res.data);
+        } catch (err) {
+            console.error(err);
+            showNotification('Failed to fetch dataset stats');
+        }
+    };
+
+    const handleRebalance = async () => {
+        if (!rebalanceInput) {
+            showNotification('Please select a dataset');
+            return;
+        }
+
+        const total = newRebalancePcts.train + newRebalancePcts.val + newRebalancePcts.test;
+        if (total !== 100) {
+            showNotification(`Total percentage must be 100% (Current: ${total}%)`);
+            return;
+        }
+
+        setIsTaskRunning(true);
+        setTaskProgress({ status: 'rebalancing', message: 'Re-balancing dataset...', current: 0, total: 100 });
+
+        try {
+            const res = await axios.post(`${API_BASE}/dataset/rebalance`, {
+                dataset_path: rebalanceInput,
+                train_pct: newRebalancePcts.train / 100,
+                val_pct: newRebalancePcts.val / 100,
+                test_pct: newRebalancePcts.test / 100,
+                delete_original: deleteOriginalRebalance
+            });
+
+            showNotification(res.data.message);
+            // Update stats with new location if moved/changed
+            setRebalanceInput(res.data.new_path);
+            setRebalanceStats(res.data.stats);
+
+            setIsTaskRunning(false);
+            setTaskProgress(null);
+        } catch (err) {
+            showNotification('Re-balance failed: ' + (err.response?.data?.detail || err.message));
+            setIsTaskRunning(false);
+            setTaskProgress(null);
+        }
+    };
+
+    const handleFlatten = async () => {
+        if (!flattenInput) {
+            showNotification('Please select a dataset to flatten');
+            return;
+        }
+
+        setIsTaskRunning(true);
+        setTaskProgress({ status: 'flattening', message: 'Flattening dataset...', current: 0, total: 100 });
+        try {
+            await axios.post(`${API_BASE}/dataset/flatten`, {
+                dataset_path: flattenInput
+            });
+            showNotification('Dataset flattening started (or completed)');
+        } catch (err) {
+            showNotification('Flattening failed: ' + (err.response?.data?.detail || err.message));
+            setIsTaskRunning(false);
+            setTaskProgress(null);
+        }
+    };
+
     const handleGenerateMasks = async () => {
         if (!datasetPath) {
             showNotification('Please load a dataset first.');
@@ -1205,9 +1288,9 @@ function App() {
                         onCreateProject={handleCreateProject}
                         onLoadProject={handleLoadProject}
                         onBrowse={handleLandingBrowse}
-                        onSkip={() => {
+                        onSkip={(targetTab = 'training') => {
                             setIsStandalone(true);
-                            setActiveTab('training');
+                            setActiveTab(targetTab);
                         }}
                     />
                     {showFileBrowser && <FileBrowserModal />}
@@ -1579,7 +1662,7 @@ function App() {
                                     </div>
                                 </div>
 
-                                {availableClasses.length > 0 && (
+                                {availableClasses.length > 0 && (<>
                                     <div className="input-group" style={{ marginTop: '20px' }}>
                                         <label>Select Classes to Extract</label>
                                         <div style={{
@@ -1608,22 +1691,30 @@ function App() {
                                                         checked={selectedClasses.includes(cls)}
                                                         onChange={() => toggleClass(cls)}
                                                     />
-                                                    {cls}
+                                                    <span onClick={(e) => { e.preventDefault(); toggleFilterClass(cls); }}>
+                                                        {cls}
+                                                    </span>
                                                 </label>
                                             ))}
                                         </div>
-                                        <div style={{ marginTop: '10px', fontSize: '0.8rem', opacity: 0.6 }}>
-                                            {selectedClasses.length} classes selected
-                                        </div>
                                     </div>
-                                )}
+                                    <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end', gap: '15px' }}>
+                                        <button
+                                            className="btn btn-primary"
+                                            onClick={handleExtract}
+                                            disabled={isTaskRunning || selectedClasses.length === 0}
+                                        >
+                                            Extract Images
+                                        </button>
+                                    </div>
+                                </>)}
 
                                 <div className="input-group" style={{ marginTop: '30px' }}>
-                                    <label>Output Extraction Path</label>
+                                    <label>Output Directory</label>
                                     <div style={{ display: 'flex', gap: '10px' }}>
                                         <input
                                             type="text"
-                                            placeholder="/path/to/extract/to"
+                                            placeholder="/path/to/extracted/output"
                                             value={extractOutput}
                                             onChange={(e) => setExtractOutput(e.target.value)}
                                             style={{ flex: 1 }}
@@ -1633,6 +1724,7 @@ function App() {
                                         </button>
                                     </div>
                                 </div>
+
 
                                 <div style={{ marginTop: '40px' }}>
                                     <button
@@ -1660,6 +1752,144 @@ function App() {
                                     )}
                                 </div>
                             </div>
+
+                            {/* Re-balance Section */}
+                            <div style={{ marginTop: '50px', paddingTop: '40px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+                                <div className="section-title">Dataset Splits: Re-balance</div>
+                                <p style={{ opacity: 0.7, marginBottom: '25px', fontSize: '0.9rem' }}>
+                                    Re-distribute images between Train, Validation, and Test sets.
+                                </p>
+
+                                <div className="input-group">
+                                    <label>Dataset to Re-balance</label>
+                                    <div style={{ display: 'flex', gap: '10px' }}>
+                                        <input
+                                            type="text"
+                                            placeholder="/path/to/dataset"
+                                            value={rebalanceInput}
+                                            onChange={(e) => setRebalanceInput(e.target.value)}
+                                            onBlur={() => { if (rebalanceInput) fetchRebalanceStats(rebalanceInput); }}
+                                            style={{ flex: 1 }}
+                                        />
+                                        <button className="browse-btn" onClick={() => openFileBrowser('rebalance_input', 'dir')}>
+                                            Browse
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {rebalanceStats && (
+                                    <div className="glass p-card" style={{ marginTop: '20px', padding: '15px', background: 'rgba(255,255,255,0.03)' }}>
+                                        <div style={{ fontWeight: 'bold', marginBottom: '10px', fontSize: '0.9rem' }}>Current Splits:</div>
+                                        <div style={{ display: 'flex', gap: '20px', fontSize: '0.85rem' }}>
+                                            <span>Total: {rebalanceStats.total} images</span>
+                                            {Object.entries(rebalanceStats.splits).map(([k, v]) => (
+                                                <span key={k} style={{ color: 'var(--text-muted)' }}>
+                                                    {k}: {v.count} ({v.percentage}%)
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="input-group" style={{ marginTop: '20px' }}>
+                                    <label>New Split Ratios (%)</label>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+                                        <div>
+                                            <span style={{ fontSize: '0.8rem', opacity: 0.7 }}>Train</span>
+                                            <input
+                                                type="number"
+                                                value={newRebalancePcts.train}
+                                                onChange={(e) => setNewRebalancePcts({ ...newRebalancePcts, train: parseInt(e.target.value) || 0 })}
+                                            />
+                                        </div>
+                                        <div>
+                                            <span style={{ fontSize: '0.8rem', opacity: 0.7 }}>Val</span>
+                                            <input
+                                                type="number"
+                                                value={newRebalancePcts.val}
+                                                onChange={(e) => setNewRebalancePcts({ ...newRebalancePcts, val: parseInt(e.target.value) || 0 })}
+                                            />
+                                        </div>
+                                        <div>
+                                            <span style={{ fontSize: '0.8rem', opacity: 0.7 }}>Test</span>
+                                            <input
+                                                type="number"
+                                                value={newRebalancePcts.test}
+                                                onChange={(e) => setNewRebalancePcts({ ...newRebalancePcts, test: parseInt(e.target.value) || 0 })}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {(newRebalancePcts.train + newRebalancePcts.val + newRebalancePcts.test) !== 100 && (
+                                        <div style={{ color: '#ef4444', fontSize: '0.8rem', marginTop: '5px' }}>
+                                            Total: {newRebalancePcts.train + newRebalancePcts.val + newRebalancePcts.test}% (Must be 100%)
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="input-group" style={{ marginTop: '20px' }}>
+                                    <label className="checkbox-container">
+                                        <input
+                                            type="checkbox"
+                                            checked={deleteOriginalRebalance}
+                                            onChange={(e) => setDeleteOriginalRebalance(e.target.checked)}
+                                        />
+                                        <span className="checkmark"></span>
+                                        <span style={{ marginLeft: '10px' }}>Delete Original Dataset (Replace in-place)</span>
+                                    </label>
+                                    <div style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '5px' }}>
+                                        {deleteOriginalRebalance
+                                            ? "Warning: The original folder will be replaced by the re-balanced version."
+                                            : "A new folder will be created (e.g., dataset_rebalanced)."}
+                                    </div>
+                                </div>
+
+                                <button
+                                    className="btn btn-primary"
+                                    style={{ marginTop: '20px' }}
+                                    onClick={handleRebalance}
+                                    disabled={isTaskRunning || (newRebalancePcts.train + newRebalancePcts.val + newRebalancePcts.test) !== 100}
+                                >
+                                    Re-balance Splits
+                                </button>
+                            </div>
+
+                            {/* Flatten Dataset Section */}
+                            <div style={{ marginTop: '50px', paddingTop: '40px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+                                <div className="section-title">Dataset Tools: Flatten</div>
+                                <p style={{ opacity: 0.7, marginBottom: '25px', fontSize: '0.9rem' }}>
+                                    Convert a split dataset (train/val/test) into a flat structure (images/labels).
+                                </p>
+
+                                <div className="input-group">
+                                    <label>Dataset to Flatten</label>
+                                    <div style={{ display: 'flex', gap: '10px' }}>
+                                        <input
+                                            type="text"
+                                            placeholder="/path/to/dataset"
+                                            value={flattenInput}
+                                            onChange={(e) => setFlattenInput(e.target.value)}
+                                            style={{ flex: 1 }}
+                                        />
+                                        <button className="browse-btn" onClick={() => openFileBrowser('flatten_input', 'dir')}>
+                                            Browse
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <button
+                                    className="btn btn-primary"
+                                    onClick={handleFlatten}
+                                    disabled={isTaskRunning || !flattenInput}
+                                    style={{ marginTop: '20px' }}
+                                >
+                                    Flatten Dataset
+                                </button>
+                            </div>
+
+
+
+
 
                             {/* Split Dataset Section */}
                             <div style={{ marginTop: '50px', paddingTop: '40px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
@@ -1732,361 +1962,372 @@ function App() {
                                 taskProgress={taskProgress}
                                 onStartTask={() => setIsTaskRunning(true)}
                             />
-                        </section>
-                    )}
+                        </section >
+                    )
+                    }
 
-                    {activeTab === 'preprocess' && (
-                        <section className="glass section-card">
-                            <div className="section-title">Step 2: Pre-processing Configuration</div>
-                            <div style={{ marginBottom: '15px', color: '#a1a1aa' }}>
-                                Source: <span style={{ fontFamily: 'monospace', color: '#e4e4e7' }}>{projectPaths?.raw || datasetPath}</span>
-                            </div>
-                            <div className="grid" style={{ gridTemplateColumns: '1fr 350px', gap: '40px' }}>
-                                <div>
-                                    {sampleImage ? (
-                                        <div className="crop-container" style={{ border: '1px solid var(--border-color)', borderRadius: '12px', background: '#000' }}>
-                                            <ReactCrop
-                                                crop={crop}
-                                                onChange={(_, percentCrop) => setCrop(percentCrop)}
-                                                onComplete={(_, percentCrop) => setCompletedCrop(percentCrop)}
-                                            >
-                                                <img
-                                                    src={sampleImage.sample_url}
-                                                    style={{ maxWidth: '100%', display: 'block' }}
-                                                    onLoad={(e) => setImgRef(e.currentTarget)}
-                                                />
-                                            </ReactCrop>
-                                        </div>
-                                    ) : (
-                                        <div style={{ padding: '80px 40px', textAlign: 'center', opacity: 0.5, border: '2px dashed var(--border-color)', borderRadius: '16px' }}>
-                                            Select a dataset first to configure cropping
-                                        </div>
-                                    )}
+                    {
+                        activeTab === 'preprocess' && (
+                            <section className="glass section-card">
+                                <div className="section-title">Step 2: Pre-processing Configuration</div>
+                                <div style={{ marginBottom: '15px', color: '#a1a1aa' }}>
+                                    Source: <span style={{ fontFamily: 'monospace', color: '#e4e4e7' }}>{projectPaths?.raw || datasetPath}</span>
                                 </div>
-
-                                <div>
-                                    <div className="input-group">
-                                        <label>Resize dimensions</label>
-                                        <div style={{ display: 'flex', gap: '10px' }}>
-                                            <input type="number" value={resizeWidth} onChange={e => setResizeWidth(e.target.value)} placeholder="W" />
-                                            <input type="number" value={resizeHeight} onChange={e => setResizeHeight(e.target.value)} placeholder="H" />
-                                        </div>
+                                <div className="grid" style={{ gridTemplateColumns: '1fr 350px', gap: '40px' }}>
+                                    <div>
+                                        {sampleImage ? (
+                                            <div className="crop-container" style={{ border: '1px solid var(--border-color)', borderRadius: '12px', background: '#000' }}>
+                                                <ReactCrop
+                                                    crop={crop}
+                                                    onChange={(_, percentCrop) => setCrop(percentCrop)}
+                                                    onComplete={(_, percentCrop) => setCompletedCrop(percentCrop)}
+                                                >
+                                                    <img
+                                                        src={sampleImage.sample_url}
+                                                        style={{ maxWidth: '100%', display: 'block' }}
+                                                        onLoad={(e) => setImgRef(e.currentTarget)}
+                                                    />
+                                                </ReactCrop>
+                                            </div>
+                                        ) : (
+                                            <div style={{ padding: '80px 40px', textAlign: 'center', opacity: 0.5, border: '2px dashed var(--border-color)', borderRadius: '16px' }}>
+                                                Select a dataset first to configure cropping
+                                            </div>
+                                        )}
                                     </div>
 
-                                    <div className="stats-card" style={{ marginBottom: '20px' }}>
-                                        <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Current Crop (Original px)</label>
-                                        <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '15px', marginTop: '15px' }}>
-                                            <div className="input-group" style={{ margin: 0 }}>
-                                                <label style={{ fontSize: '0.7rem' }}>X</label>
-                                                <input
-                                                    type="number"
-                                                    value={scaledDisplay?.x || 0}
-                                                    onChange={e => updateManualCrop('x', e.target.value)}
-                                                    style={{ padding: '8px' }}
-                                                />
-                                            </div>
-                                            <div className="input-group" style={{ margin: 0 }}>
-                                                <label style={{ fontSize: '0.7rem' }}>Y</label>
-                                                <input
-                                                    type="number"
-                                                    value={scaledDisplay?.y || 0}
-                                                    onChange={e => updateManualCrop('y', e.target.value)}
-                                                    style={{ padding: '8px' }}
-                                                />
-                                            </div>
-                                            <div className="input-group" style={{ margin: 0 }}>
-                                                <label style={{ fontSize: '0.7rem' }}>Width</label>
-                                                <input
-                                                    type="number"
-                                                    value={scaledDisplay?.width || 0}
-                                                    onChange={e => updateManualCrop('width', e.target.value)}
-                                                    style={{ padding: '8px' }}
-                                                />
-                                            </div>
-                                            <div className="input-group" style={{ margin: 0 }}>
-                                                <label style={{ fontSize: '0.7rem' }}>Height</label>
-                                                <input
-                                                    type="number"
-                                                    value={scaledDisplay?.height || 0}
-                                                    onChange={e => updateManualCrop('height', e.target.value)}
-                                                    style={{ padding: '8px' }}
-                                                />
+                                    <div>
+                                        <div className="input-group">
+                                            <label>Resize dimensions</label>
+                                            <div style={{ display: 'flex', gap: '10px' }}>
+                                                <input type="number" value={resizeWidth} onChange={e => setResizeWidth(e.target.value)} placeholder="W" />
+                                                <input type="number" value={resizeHeight} onChange={e => setResizeHeight(e.target.value)} placeholder="H" />
                                             </div>
                                         </div>
-                                    </div>
 
-                                    <button className="btn btn-primary" style={{ width: '100%' }} onClick={handlePreprocess} disabled={(!datasetInfo && !projectPaths) || isTaskRunning}>
-                                        {isTaskRunning && taskProgress?.status === 'processing' ? 'Processing...' : 'Run Pre-processing'}
-                                    </button>
-                                    <ProgressBar progress={taskProgress} type="processing" />
-
-
-                                </div>
-                            </div>
-                        </section>
-                    )}
-
-                    {activeTab === 'labeling' && (
-                        <section className="glass section-card" style={labelingMode === 'single' ? { maxWidth: '100%', height: 'calc(100vh - 150px)', overflowY: 'auto' } : { maxWidth: '700px' }}>
-                            <div className="section-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                                <span>Step 3: AI Auto-Labeling</span>
-                                <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', padding: '4px', border: '1px solid var(--border-color)' }}>
-                                    <button
-                                        className="btn"
-                                        style={{
-                                            padding: '6px 15px',
-                                            fontSize: '0.8rem',
-                                            background: labelingMode === 'batch' ? 'var(--primary)' : 'transparent',
-                                            border: 'none',
-                                            color: 'white',
-                                            borderRadius: '5px'
-                                        }}
-                                        onClick={() => setLabelingMode('batch')}
-                                    >
-                                        Batch Process
-                                    </button>
-                                    <button
-                                        className="btn"
-                                        style={{
-                                            padding: '6px 15px',
-                                            fontSize: '0.8rem',
-                                            background: labelingMode === 'single' ? 'var(--primary)' : 'transparent',
-                                            border: 'none',
-                                            color: 'white',
-                                            borderRadius: '5px'
-                                        }}
-                                        onClick={() => setLabelingMode('single')}
-                                    >
-                                        Single Image
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div className="input-group">
-                                <label>YOLO Model Path (.pt)</label>
-                                <div style={{ display: 'flex', gap: '10px' }}>
-                                    <input
-                                        type="text"
-                                        placeholder="/path/to/model.pt"
-                                        value={modelPath}
-                                        onChange={(e) => setModelPath(e.target.value)}
-                                        style={{ flex: 1 }}
-                                    />
-                                    <button className="browse-btn" onClick={() => openFileBrowser('model', 'file')}>
-                                        Browse
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div className="input-group">
-                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                    <label>Confidence Threshold</label>
-                                    <span style={{ color: 'var(--primary)', fontWeight: 'bold' }}>{confidence}</span>
-                                </div>
-                                <input
-                                    type="range" min="0.1" max="1.0" step="0.05"
-                                    value={confidence}
-                                    onChange={e => setConfidence(e.target.value)}
-                                    style={{ width: '100%', marginTop: '10px' }}
-                                />
-                            </div>
-
-                            <div className="stats-card" style={{ marginBottom: '25px', background: 'rgba(255,255,255,0.03)' }}>
-                                <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Source Directory</label>
-                                <div style={{ fontSize: '0.9rem', marginTop: '5px', wordBreak: 'break-all', fontFamily: 'monospace' }}>
-                                    {lastProcessedDir ? lastProcessedDir : datasetPath || 'Not selected'}
-                                </div>
-                            </div>
-
-                            {labelingMode === 'batch' ? (
-                                <>
-                                    <button className="btn btn-primary" style={{ height: '50px', fontSize: '1rem' }} onClick={handleAutoLabel} disabled={(!datasetInfo && !projectPaths) || isTaskRunning}>
-                                        {isTaskRunning && taskProgress?.status === 'labeling' ? 'Labeling in Progress...' : '⚡ Start Auto-Labeling'}
-                                    </button>
-
-                                    <ProgressBar progress={taskProgress} type="labeling" />
-
-                                    {labelResult && (
-                                        <div className="stats-card" style={{ marginTop: '30px', borderLeft: '4px solid var(--accent)' }}>
-                                            <div style={{ color: 'var(--accent)', fontWeight: 'bold', marginBottom: '15px' }}>✓ Process Complete</div>
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '0.9rem' }}>
-                                                <div><strong>Output:</strong> {labelResult.labeled_dir}</div>
-                                                <div><strong>Config:</strong> {labelResult.yaml_path}</div>
-                                                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '5px' }}>
-                                                    {labelResult.classes && labelResult.classes.map((c, i) => (
-                                                        <span key={i} className="badge">{c}</span>
-                                                    ))}
+                                        <div className="stats-card" style={{ marginBottom: '20px' }}>
+                                            <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Current Crop (Original px)</label>
+                                            <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '15px', marginTop: '15px' }}>
+                                                <div className="input-group" style={{ margin: 0 }}>
+                                                    <label style={{ fontSize: '0.7rem' }}>X</label>
+                                                    <input
+                                                        type="number"
+                                                        value={scaledDisplay?.x || 0}
+                                                        onChange={e => updateManualCrop('x', e.target.value)}
+                                                        style={{ padding: '8px' }}
+                                                    />
+                                                </div>
+                                                <div className="input-group" style={{ margin: 0 }}>
+                                                    <label style={{ fontSize: '0.7rem' }}>Y</label>
+                                                    <input
+                                                        type="number"
+                                                        value={scaledDisplay?.y || 0}
+                                                        onChange={e => updateManualCrop('y', e.target.value)}
+                                                        style={{ padding: '8px' }}
+                                                    />
+                                                </div>
+                                                <div className="input-group" style={{ margin: 0 }}>
+                                                    <label style={{ fontSize: '0.7rem' }}>Width</label>
+                                                    <input
+                                                        type="number"
+                                                        value={scaledDisplay?.width || 0}
+                                                        onChange={e => updateManualCrop('width', e.target.value)}
+                                                        style={{ padding: '8px' }}
+                                                    />
+                                                </div>
+                                                <div className="input-group" style={{ margin: 0 }}>
+                                                    <label style={{ fontSize: '0.7rem' }}>Height</label>
+                                                    <input
+                                                        type="number"
+                                                        value={scaledDisplay?.height || 0}
+                                                        onChange={e => updateManualCrop('height', e.target.value)}
+                                                        style={{ padding: '8px' }}
+                                                    />
                                                 </div>
                                             </div>
                                         </div>
-                                    )}
-                                </>
-                            ) : (
-                                <div className="single-label-container" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', minHeight: '400px' }}>
-                                    {/* Left: Raw Image */}
-                                    <div className="glass" style={{ padding: '15px', display: 'flex', flexDirection: 'column' }}>
-                                        <div style={{ marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                <span style={{ fontWeight: 'bold' }}>Raw Image</span>
-                                                {labelingImages.length > 0 && (
-                                                    <span style={{ fontSize: '0.8rem', opacity: 0.6 }}>
-                                                        {currentSingleImageIndex + 1} / {labelingImages.length}
-                                                    </span>
+
+                                        <button className="btn btn-primary" style={{ width: '100%' }} onClick={handlePreprocess} disabled={(!datasetInfo && !projectPaths) || isTaskRunning}>
+                                            {isTaskRunning && taskProgress?.status === 'processing' ? 'Processing...' : 'Run Pre-processing'}
+                                        </button>
+                                        <ProgressBar progress={taskProgress} type="processing" />
+
+
+                                    </div>
+                                </div>
+                            </section>
+                        )
+                    }
+
+                    {
+                        activeTab === 'labeling' && (
+                            <section className="glass section-card" style={labelingMode === 'single' ? { maxWidth: '100%', height: 'calc(100vh - 150px)', overflowY: 'auto' } : { maxWidth: '700px' }}>
+                                <div className="section-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                                    <span>Step 3: AI Auto-Labeling</span>
+                                    <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', padding: '4px', border: '1px solid var(--border-color)' }}>
+                                        <button
+                                            className="btn"
+                                            style={{
+                                                padding: '6px 15px',
+                                                fontSize: '0.8rem',
+                                                background: labelingMode === 'batch' ? 'var(--primary)' : 'transparent',
+                                                border: 'none',
+                                                color: 'white',
+                                                borderRadius: '5px'
+                                            }}
+                                            onClick={() => setLabelingMode('batch')}
+                                        >
+                                            Batch Process
+                                        </button>
+                                        <button
+                                            className="btn"
+                                            style={{
+                                                padding: '6px 15px',
+                                                fontSize: '0.8rem',
+                                                background: labelingMode === 'single' ? 'var(--primary)' : 'transparent',
+                                                border: 'none',
+                                                color: 'white',
+                                                borderRadius: '5px'
+                                            }}
+                                            onClick={() => setLabelingMode('single')}
+                                        >
+                                            Single Image
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="input-group">
+                                    <label>YOLO Model Path (.pt)</label>
+                                    <div style={{ display: 'flex', gap: '10px' }}>
+                                        <input
+                                            type="text"
+                                            placeholder="/path/to/model.pt"
+                                            value={modelPath}
+                                            onChange={(e) => setModelPath(e.target.value)}
+                                            style={{ flex: 1 }}
+                                        />
+                                        <button className="browse-btn" onClick={() => openFileBrowser('model', 'file')}>
+                                            Browse
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="input-group">
+                                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                        <label>Confidence Threshold</label>
+                                        <span style={{ color: 'var(--primary)', fontWeight: 'bold' }}>{confidence}</span>
+                                    </div>
+                                    <input
+                                        type="range" min="0.1" max="1.0" step="0.05"
+                                        value={confidence}
+                                        onChange={e => setConfidence(e.target.value)}
+                                        style={{ width: '100%', marginTop: '10px' }}
+                                    />
+                                </div>
+
+                                <div className="stats-card" style={{ marginBottom: '25px', background: 'rgba(255,255,255,0.03)' }}>
+                                    <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Source Directory</label>
+                                    <div style={{ fontSize: '0.9rem', marginTop: '5px', wordBreak: 'break-all', fontFamily: 'monospace' }}>
+                                        {lastProcessedDir ? lastProcessedDir : datasetPath || 'Not selected'}
+                                    </div>
+                                </div>
+
+                                {labelingMode === 'batch' ? (
+                                    <>
+                                        <button className="btn btn-primary" style={{ height: '50px', fontSize: '1rem' }} onClick={handleAutoLabel} disabled={(!datasetInfo && !projectPaths) || isTaskRunning}>
+                                            {isTaskRunning && taskProgress?.status === 'labeling' ? 'Labeling in Progress...' : '⚡ Start Auto-Labeling'}
+                                        </button>
+
+                                        <ProgressBar progress={taskProgress} type="labeling" />
+
+                                        {labelResult && (
+                                            <div className="stats-card" style={{ marginTop: '30px', borderLeft: '4px solid var(--accent)' }}>
+                                                <div style={{ color: 'var(--accent)', fontWeight: 'bold', marginBottom: '15px' }}>✓ Process Complete</div>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '0.9rem' }}>
+                                                    <div><strong>Output:</strong> {labelResult.labeled_dir}</div>
+                                                    <div><strong>Config:</strong> {labelResult.yaml_path}</div>
+                                                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '5px' }}>
+                                                        {labelResult.classes && labelResult.classes.map((c, i) => (
+                                                            <span key={i} className="badge">{c}</span>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </>
+                                ) : (
+                                    <div className="single-label-container" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', minHeight: '400px' }}>
+                                        {/* Left: Raw Image */}
+                                        <div className="glass" style={{ padding: '15px', display: 'flex', flexDirection: 'column' }}>
+                                            <div style={{ marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                    <span style={{ fontWeight: 'bold' }}>Raw Image</span>
+                                                    {labelingImages.length > 0 && (
+                                                        <span style={{ fontSize: '0.8rem', opacity: 0.6 }}>
+                                                            {currentSingleImageIndex + 1} / {labelingImages.length}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="input-group" style={{ margin: 0 }}>
+                                                    <input
+                                                        type="text"
+                                                        placeholder="Search image name..."
+                                                        value={imageSearchQuery}
+                                                        onChange={handleImageSearch}
+                                                        style={{ padding: '6px', fontSize: '0.9rem', width: '100%' }}
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', overflow: 'hidden', minHeight: '300px', position: 'relative' }}>
+                                                {labelingImages.length > 0 ? (
+                                                    <img
+                                                        src={`/static/labeling_source/${labelingImages[currentSingleImageIndex]?.name}?t=${cacheBuster}`}
+                                                        style={{ maxWidth: '100%', maxHeight: '400px', objectFit: 'contain' }}
+                                                    />
+                                                ) : (
+                                                    <div style={{ opacity: 0.5 }}>No images found</div>
                                                 )}
                                             </div>
-                                            <div className="input-group" style={{ margin: 0 }}>
-                                                <input
-                                                    type="text"
-                                                    placeholder="Search image name..."
-                                                    value={imageSearchQuery}
-                                                    onChange={handleImageSearch}
-                                                    style={{ padding: '6px', fontSize: '0.9rem', width: '100%' }}
-                                                />
-                                            </div>
-                                        </div>
 
-                                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', overflow: 'hidden', minHeight: '300px', position: 'relative' }}>
-                                            {labelingImages.length > 0 ? (
-                                                <img
-                                                    src={`/static/labeling_source/${labelingImages[currentSingleImageIndex]?.name}?t=${cacheBuster}`}
-                                                    style={{ maxWidth: '100%', maxHeight: '400px', objectFit: 'contain' }}
-                                                />
-                                            ) : (
-                                                <div style={{ opacity: 0.5 }}>No images found</div>
-                                            )}
-                                        </div>
-
-                                        <div style={{ display: 'flex', gap: '10px', marginTop: '15px', justifyContent: 'center' }}>
-                                            <button
-                                                className="btn"
-                                                onClick={() => navigateSingleImage(-1)}
-                                                disabled={currentSingleImageIndex === 0}
-                                            >
-                                                Previous (←)
-                                            </button>
-                                            <div style={{ flex: 1, textAlign: 'center', fontSize: '0.8rem', fontFamily: 'monospace', alignSelf: 'center' }}>
-                                                {labelingImages[currentSingleImageIndex]?.name || '-'}
-                                            </div>
-                                            <button
-                                                className="btn"
-                                                onClick={() => navigateSingleImage(1)}
-                                                disabled={currentSingleImageIndex === labelingImages.length - 1}
-                                            >
-                                                Next (→)
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    {/* Right: Result */}
-                                    <div className="glass" style={{ padding: '15px', display: 'flex', flexDirection: 'column' }}>
-                                        <div style={{ marginBottom: '10px', fontWeight: 'bold' }}>Labeling Result</div>
-
-                                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', overflow: 'hidden', minHeight: '300px' }}>
-                                            {singleLabelLoading ? (
-                                                <div className="spinner"></div>
-                                            ) : singleLabelResult && singleLabelResult.masked_url ? (
-                                                <img
-                                                    src={`${singleLabelResult.masked_url}?t=${cacheBuster}`}
-                                                    style={{ maxWidth: '100%', maxHeight: '400px', objectFit: 'contain' }}
-                                                />
-                                            ) : (
-                                                <div style={{ opacity: 0.3, textAlign: 'center' }}>
-                                                    <div>Result will appear here</div>
+                                            <div style={{ display: 'flex', gap: '10px', marginTop: '15px', justifyContent: 'center' }}>
+                                                <button
+                                                    className="btn"
+                                                    onClick={() => navigateSingleImage(-1)}
+                                                    disabled={currentSingleImageIndex === 0}
+                                                >
+                                                    Previous (←)
+                                                </button>
+                                                <div style={{ flex: 1, textAlign: 'center', fontSize: '0.8rem', fontFamily: 'monospace', alignSelf: 'center' }}>
+                                                    {labelingImages[currentSingleImageIndex]?.name || '-'}
                                                 </div>
-                                            )}
+                                                <button
+                                                    className="btn"
+                                                    onClick={() => navigateSingleImage(1)}
+                                                    disabled={currentSingleImageIndex === labelingImages.length - 1}
+                                                >
+                                                    Next (→)
+                                                </button>
+                                            </div>
                                         </div>
 
-                                        <div style={{ marginTop: '15px' }}>
-                                            <button
-                                                className="btn btn-primary"
-                                                style={{ width: '100%' }}
-                                                onClick={handleAutoLabelSingle}
-                                                disabled={singleLabelLoading || !labelingImages[currentSingleImageIndex]}
-                                            >
-                                                {singleLabelLoading ? 'Processing...' : '⚡ Auto-Label This Image'}
-                                            </button>
+                                        {/* Right: Result */}
+                                        <div className="glass" style={{ padding: '15px', display: 'flex', flexDirection: 'column' }}>
+                                            <div style={{ marginBottom: '10px', fontWeight: 'bold' }}>Labeling Result</div>
+
+                                            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', overflow: 'hidden', minHeight: '300px' }}>
+                                                {singleLabelLoading ? (
+                                                    <div className="spinner"></div>
+                                                ) : singleLabelResult && singleLabelResult.masked_url ? (
+                                                    <img
+                                                        src={`${singleLabelResult.masked_url}?t=${cacheBuster}`}
+                                                        style={{ maxWidth: '100%', maxHeight: '400px', objectFit: 'contain' }}
+                                                    />
+                                                ) : (
+                                                    <div style={{ opacity: 0.3, textAlign: 'center' }}>
+                                                        <div>Result will appear here</div>
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            <div style={{ marginTop: '15px' }}>
+                                                <button
+                                                    className="btn btn-primary"
+                                                    style={{ width: '100%' }}
+                                                    onClick={handleAutoLabelSingle}
+                                                    disabled={singleLabelLoading || !labelingImages[currentSingleImageIndex]}
+                                                >
+                                                    {singleLabelLoading ? 'Processing...' : '⚡ Auto-Label This Image'}
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
-                            )}
+                                )}
 
 
 
-                        </section>
-                    )}
+                            </section>
+                        )
+                    }
 
-                    {activeTab === 'verification' && (
-                        <section className="glass section-card">
-                            <div className="section-title">Step 4: Quality Verification</div>
-                            <p style={{ color: 'var(--text-muted)', marginBottom: '30px' }}>
-                                Preview labeled results with confidence scores and bounding boxes.
-                            </p>
-                            <VerificationGallery
-                                onJumpToAnnotation={jumpToAnnotation}
-                                availableClasses={availableClasses}
-                                datasetStats={datasetStats}
-                                filterClasses={filterClasses}
-                                setFilterClasses={setFilterClasses}
-                                searchQuery={searchQuery}
-                                setSearchQuery={setSearchQuery}
-                                maskedOffset={maskedOffset}
-                                maskedImages={maskedImages}
-                                totalMasked={totalMasked}
-                                isTaskRunning={isTaskRunning}
-                                handleGenerateMasks={handleGenerateMasks}
-                                handleRefreshGallery={handleRefreshGallery}
-                                toggleFilterClass={toggleFilterClass}
-                                hasLabels={hasLabels}
-                                hasMasks={hasMasks}
-                                taskProgress={taskProgress}
-                                setSelectedLightboxImage={setSelectedLightboxImage}
-                                maskedMountUrl={maskedMountUrl}
-                                cacheBuster={cacheBuster}
-                                handleFilterImage={handleFilterImage}
-                                MASKED_LIMIT={MASKED_LIMIT}
-                                handlePageChange={handlePageChange}
-                                verificationScroll={verificationScroll}
-                                setVerificationScroll={setVerificationScroll}
-                            />
-                        </section>
-                    )}
-
-                    {activeTab === 'stats' && (
-                        <section className="glass section-card">
-                            <div className="section-title">Step 5: Dataset Insights</div>
-                            {statsLoading ? (
-                                <div style={{ padding: '100px', textAlign: 'center' }}>
-                                    <div className="spinner" style={{ marginBottom: '20px' }}></div>
-                                    <p>Generating comprehensive analytics...</p>
-                                </div>
-                            ) : (
-                                <StatsView
-                                    projectPaths={projectPaths}
-                                    existingDatasets={existingDatasets}
+                    {
+                        activeTab === 'verification' && (
+                            <section className="glass section-card">
+                                <div className="section-title">Step 4: Quality Verification</div>
+                                <p style={{ color: 'var(--text-muted)', marginBottom: '30px' }}>
+                                    Preview labeled results with confidence scores and bounding boxes.
+                                </p>
+                                <VerificationGallery
+                                    onJumpToAnnotation={jumpToAnnotation}
+                                    availableClasses={availableClasses}
                                     datasetStats={datasetStats}
-                                    statsPath={statsPath}
-                                    setStatsPath={setStatsPath}
-                                    fetchStats={fetchStats}
-                                    handleExtractEmpty={handleExtractEmpty}
+                                    filterClasses={filterClasses}
+                                    setFilterClasses={setFilterClasses}
+                                    searchQuery={searchQuery}
+                                    setSearchQuery={setSearchQuery}
+                                    maskedOffset={maskedOffset}
+                                    maskedImages={maskedImages}
+                                    totalMasked={totalMasked}
                                     isTaskRunning={isTaskRunning}
+                                    handleGenerateMasks={handleGenerateMasks}
+                                    handleRefreshGallery={handleRefreshGallery}
+                                    toggleFilterClass={toggleFilterClass}
+                                    hasLabels={hasLabels}
+                                    hasMasks={hasMasks}
                                     taskProgress={taskProgress}
-                                    datasetPath={datasetPath}
-                                    projectConfig={projectConfig}
-                                    activeTab={activeTab}
-                                    labelResult={labelResult}
+                                    setSelectedLightboxImage={setSelectedLightboxImage}
+                                    maskedMountUrl={maskedMountUrl}
+                                    cacheBuster={cacheBuster}
+                                    handleFilterImage={handleFilterImage}
+                                    MASKED_LIMIT={MASKED_LIMIT}
+                                    handlePageChange={handlePageChange}
+                                    verificationScroll={verificationScroll}
+                                    setVerificationScroll={setVerificationScroll}
                                 />
-                            )}
-                        </section>
-                    )}
-                    {activeTab === 'training' && (
-                        <div style={{ height: 'calc(100vh - 40px)', overflow: 'hidden' }}>
-                            <TrainingView
-                                datasetPath={projectPaths?.processed || datasetPath} // Fallback to datasetPath
-                                onBrowse={handleTrainingBrowse}
-                            />
-                        </div>
-                    )}
-                </div>
+                            </section>
+                        )
+                    }
+
+                    {
+                        activeTab === 'stats' && (
+                            <section className="glass section-card">
+                                <div className="section-title">Step 5: Dataset Insights</div>
+                                {statsLoading ? (
+                                    <div style={{ padding: '100px', textAlign: 'center' }}>
+                                        <div className="spinner" style={{ marginBottom: '20px' }}></div>
+                                        <p>Generating comprehensive analytics...</p>
+                                    </div>
+                                ) : (
+                                    <StatsView
+                                        projectPaths={projectPaths}
+                                        existingDatasets={existingDatasets}
+                                        datasetStats={datasetStats}
+                                        statsPath={statsPath}
+                                        setStatsPath={setStatsPath}
+                                        fetchStats={fetchStats}
+                                        handleExtractEmpty={handleExtractEmpty}
+                                        isTaskRunning={isTaskRunning}
+                                        taskProgress={taskProgress}
+                                        datasetPath={datasetPath}
+                                        projectConfig={projectConfig}
+                                        activeTab={activeTab}
+                                        labelResult={labelResult}
+                                    />
+                                )}
+                            </section>
+                        )
+                    }
+                    {
+                        activeTab === 'training' && (
+                            <div style={{ height: 'calc(100vh - 40px)', overflow: 'hidden' }}>
+                                <TrainingView
+                                    datasetPath={projectPaths?.processed || datasetPath} // Fallback to datasetPath
+                                    onBrowse={handleTrainingBrowse}
+                                />
+                            </div>
+                        )
+                    }
+                </div >
             </main >
         </div >
     );

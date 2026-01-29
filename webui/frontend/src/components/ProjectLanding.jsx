@@ -224,7 +224,7 @@ const ProjectLanding = ({ onCreateProject, onLoadProject, onBrowse, onSkip }) =>
                 <p style={{ opacity: 0.7 }}>Project-based Workflow Manager</p>
             </div>
 
-            <div style={{ display: 'flex', gap: '20px' }}>
+            <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', justifyContent: 'center' }}>
                 <button
                     className="glass"
                     style={{ padding: '30px', width: '200px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '15px', cursor: 'pointer', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.1)' }}
@@ -246,7 +246,16 @@ const ProjectLanding = ({ onCreateProject, onLoadProject, onBrowse, onSkip }) =>
                 <button
                     className="glass"
                     style={{ padding: '30px', width: '200px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '15px', cursor: 'pointer', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.1)' }}
-                    onClick={onSkip}
+                    onClick={() => onSkip('processing')}
+                >
+                    <span style={{ fontSize: '3rem' }}>🛠️</span>
+                    <span style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>Dataset Tools</span>
+                </button>
+
+                <button
+                    className="glass"
+                    style={{ padding: '30px', width: '200px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '15px', cursor: 'pointer', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.1)' }}
+                    onClick={() => onSkip('training')}
                 >
                     <span style={{ fontSize: '3rem' }}>🏋️</span>
                     <span style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>Train Only</span>
@@ -256,7 +265,7 @@ const ProjectLanding = ({ onCreateProject, onLoadProject, onBrowse, onSkip }) =>
                 <button
                     className="btn"
                     style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.2)' }}
-                    onClick={onSkip}
+                    onClick={() => onSkip('training')}
                 >
                     Skip to Training Mode (No Project)
                 </button>
