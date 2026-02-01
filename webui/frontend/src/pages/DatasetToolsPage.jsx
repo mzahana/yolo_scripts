@@ -4,6 +4,7 @@ import ExtractImagesTool from '../components/tools/ExtractImagesTool';
 import RebalanceSplitsTool from '../components/tools/RebalanceSplitsTool';
 import FlattenDatasetTool from '../components/tools/FlattenDatasetTool';
 import SplitDatasetTool from '../components/tools/SplitDatasetTool';
+import DataAugmentationTool from '../components/tools/DataAugmentationTool';
 import DatasetSampling from '../components/DatasetSampling';
 
 const DatasetToolsPage = ({
@@ -30,6 +31,7 @@ const DatasetToolsPage = ({
         { id: 'rebalance', label: 'Re-balance Splits', icon: '⚖️', description: 'Re-distribute images between Train/Val/Test.' },
         { id: 'flatten', label: 'Flatten Dataset', icon: '📄', description: 'Convert split dataset to flat structure.' },
         { id: 'split', label: 'Split Dataset', icon: '✂️', description: 'Split a dataset into multiple parts.' },
+        { id: 'augmentation', label: 'Data Augmentation', icon: '🎨', description: 'Augment dataset properties and objects.' },
         { id: 'sampling', label: 'Dataset Sampling', icon: '🎲', description: 'Sample a subset of images from a dataset.' },
     ];
 
@@ -143,6 +145,20 @@ const DatasetToolsPage = ({
                         isTaskRunning={isTaskRunning}
                         taskProgress={taskProgress}
                         openFileBrowser={openFileBrowser}
+                    />
+                )}
+                {activeTool === 'augmentation' && (
+                    <DataAugmentationTool
+                        datasetPath={datasetPath}
+                        setDatasetPath={() => { }} // Read-only from context usually, or passing local setter if needed? The Prop name suggests passing generic setter, but usually datasetPath is from parent.
+                        // Actually let's use the pattern from other tools if available or just internal state
+                        // The component handles local state, but takes initial
+                        isTaskRunning={isTaskRunning}
+                        openFileBrowser={openFileBrowser}
+                        handleLandingBrowse={handleLandingBrowse}
+                        showNotification={showNotification}
+                        taskProgress={taskProgress}
+                        setIsTaskRunning={setIsTaskRunning}
                     />
                 )}
                 {activeTool === 'sampling' && (

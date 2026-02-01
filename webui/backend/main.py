@@ -16,7 +16,9 @@ from datetime import datetime
 from project_manager import ProjectManager
 from training_manager import training_manager
 from export_manager import export_manager
+from export_manager import export_manager
 from dataset_tools_manager import DatasetToolsManager
+from data_augmentation_manager import DataAugmentationManager
 import torch
 
 # Add the scripts directory to path to import existing logic
@@ -171,6 +173,32 @@ class RebalanceRequest(BaseModel):
 class FlattenRequest(BaseModel):
     dataset_path: str
 
+
+class FlattenRequest(BaseModel):
+    dataset_path: str
+
+class AugmentationPreviewRequest(BaseModel):
+    dataset_path: str
+    background_path: str # Path to temp file or existing file
+    class_ids: List[int]
+    rotation_range: Optional[List[float]] = None
+    blur_range: Optional[List[int]] = None
+    scaling_range: Optional[List[float]] = None
+    scaling_range: Optional[List[float]] = None
+    contrast_range: Optional[List[float]] = None
+    region_scale: float = 0.8
+    roi: Optional[List[float]] = None # [x, y, w, h] normalized
+    
+class AugmentationGenerateRequest(AugmentationPreviewRequest):
+    output_path: Optional[str] = None
+    num_augmentations: int = 3
+    augment_together: bool = False
+    composition_mode: bool = False
+    total_images: int = 10
+    composition_mode: bool = False
+    total_images: int = 10
+    objects_per_image: int = 3
+    custom_output_name: Optional[str] = None
 
 def find_project_root(path: Path) -> Path:
     """Heuristic to find the 'main' project directory by traversing up from known subfolders."""
@@ -712,6 +740,138 @@ def flatten_dataset(request: FlattenRequest):
     except Exception as e:
         import traceback
         traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/augmentation/upload_background")
+async def upload_background(file: UploadFile = File(...)):
+    try:
+        contents = await file.read()
+        file_path = DataAugmentationManager.save_temp_background(contents, file.filename)
+        return {"path": file_path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/augmentation/preview")
+def preview_augmentation(request: AugmentationPreviewRequest):
+    try:
+        return DataAugmentationManager.generate_preview(
+            request.dataset_path,
+            request.background_path,
+            request.class_ids,
+            request.rotation_range,
+            request.blur_range,
+            request.scaling_range,
+            request.contrast_range,
+            request.region_scale,
+            request.roi
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+class AugmentationSampleRequest(BaseModel):
+    dataset_path: str
+    class_ids: List[int]
+    background_path: str
+
+class AugmentationApplyPreviewRequest(BaseModel):
+    background_path: str
+    rotation_range: Optional[List[float]] = None
+    blur_range: Optional[List[int]] = None # Kernel size
+    scaling_range: Optional[List[float]] = None
+    contrast_range: Optional[List[float]] = None
+    region_scale: float = 0.8
+    roi: Optional[List[float]] = None
+
+@app.get("/api/augmentation/stats")
+def get_augmentation_stats(path: str):
+    try:
+        return DataAugmentationManager.get_dataset_stats(path)
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/augmentation/sample")
+def sample_augmentation_object(request: AugmentationSampleRequest):
+    try:
+        return DataAugmentationManager.sample_object(
+            request.dataset_path,
+            request.class_ids,
+            request.background_path
+        )
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/augmentation/apply_preview")
+def apply_augmentation_preview(request: AugmentationApplyPreviewRequest):
+    try:
+        return DataAugmentationManager.apply_preview_to_sample(
+            request.background_path,
+            request.rotation_range,
+            request.blur_range,
+            request.scaling_range,
+            request.contrast_range,
+            request.region_scale,
+            request.roi
+        )
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/augmentation/generate")
+def generate_augmentation(req: AugmentationGenerateRequest, background_tasks: BackgroundTasks):
+    print(f"DEBUG: /api/augmentation/generate received: {req}")
+    # Validate paths
+    try:
+        # Check if busy
+        if app.state.task_progress["status"] == "running":
+            raise HTTPException(status_code=400, detail="A task is already running")
+            
+        app.state.task_progress = {
+             "status": "starting",
+             "current": 0,
+             "total": 0,
+             "message": "Initializing augmentation...",
+             "result": None
+        }
+        
+        # Determine output path if not set
+        # Determine output path structure
+        if req.custom_output_name:
+             # Subdirectory with custom name
+             p = Path(req.dataset_path)
+             req.output_path = str(p / req.custom_output_name)
+        elif not req.output_path:
+             # Default: subfolder 'augmented'
+             p = Path(req.dataset_path)
+             req.output_path = str(p / "augmented")
+
+        background_tasks.add_task(
+            DataAugmentationManager.run_augmentation_task,
+            dataset_path=req.dataset_path,
+            background_path=req.background_path,
+            output_path=req.output_path, 
+            class_ids=req.class_ids,
+            num_augmentations=req.num_augmentations,
+            rotation_range=req.rotation_range,
+            blur_range=req.blur_range,
+            scaling_range=req.scaling_range,
+            contrast_range=req.contrast_range,
+            region_scale=req.region_scale,
+            augment_together=req.augment_together,
+            progress_tracker=app.state.task_progress,
+            roi=req.roi,
+            composition_mode=req.composition_mode,
+            total_images=req.total_images,
+            objects_per_image=req.objects_per_image
+        )
+        
+        return {"status": "started", "output_path": req.output_path}
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/dataset/sample")
