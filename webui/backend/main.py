@@ -640,15 +640,24 @@ def get_dataset_status(path: str):
         if p_ann.exists():
             labels_root = str(p_ann.absolute())
 
+    # B. Should we detect Split Dataset (train/val/test)?
+    # Boolean logic: if we don't find "flat" labels, look for splits.
+    has_splits = False
+    possible_splits = ["train", "valid", "test", "val"]
+    for s in possible_splits:
+        if (p / s / "images").exists() and (p / s / "labels").exists():
+            has_splits = True
+            break
+            
     # B. If not in config, try robustness using discover_labels_dir helper
-    if not labels_root:
+    if not labels_root and not has_splits:
         discovered = discover_labels_dir(p)
         if discovered:
             labels_root = str(discovered.absolute())
             
     
     # C. Fallback to current/parent if not found in candidates or config
-    if not labels_root:
+    if not labels_root and not has_splits:
         # Determine identifying prefix by stripping ALL technical suffixes
         p_path = Path(p).absolute()
         _, prefix = get_config_identity(p_path)
@@ -656,7 +665,7 @@ def get_dataset_status(path: str):
         # Climb up and search
         curr = p_path
         for _ in range(3):
-            candidates = [
+            candidates_lbl = [
                 curr / "labels",
                 curr / "annotations", # Standard project structure
                 curr / "labeling" / "labels", 
@@ -664,7 +673,7 @@ def get_dataset_status(path: str):
                 curr / f"{prefix}_labeled" / "labels",
                 curr.parent / f"{prefix}_labeled" / "labels"
             ]
-            for cand in candidates:
+            for cand in candidates_lbl:
                 if cand.exists() and cand.is_dir():
                     # Verify it has txt files or subdirs
                     if any(cand.glob("*.txt")) or (cand / "labels").exists():
@@ -680,9 +689,9 @@ def get_dataset_status(path: str):
     # The frontend checks `if (!labelResult?.labeled_dir)` to block generation.
     # We return `labeled_dir` key as `found_labeled`.
     
-    if labels_root and not found_labeled:
+    if (labels_root or has_splits) and not found_labeled:
          # Use labels_root as the handle for "labeled directory" if no visual masks exist yet
-         found_labeled = labels_root
+         found_labeled = labels_root if labels_root else str(p.absolute())
     
     # Override from config if masked dir is explicitly set
     if config and config.get("dirs", {}).get("masked"):
@@ -700,9 +709,10 @@ def get_dataset_status(path: str):
         "processed_dir": str(processed_dir.absolute()) if has_processed else None,
         "labeled_dir": found_labeled,
         "labels_root": labels_root,
-        "has_labels": labels_root is not None,
+        "has_labels": labels_root is not None or has_splits,
         "has_masks": has_masks,
-        "config": config
+        "config": config,
+        "is_split": has_splits
     }
 
 @app.post("/api/dataset/split-stats")
@@ -878,17 +888,32 @@ def get_sample_image(path: str):
     
     if not image_files:
         # Fallback: check standard subdirectories
-        root_p, identity = get_config_identity(p)
         potential_dirs = [
+            p / "train" / "images",
+            p / "val" / "images",
+            p / "valid" / "images",
+            p / "test" / "images",
             p / "images",
-            p / "masked_images",
-            p / f"{identity}_processed_images",
-            p / "processed_images"
+            p / "processed_images",
+            p / "masked_images"
         ]
         
         for d in potential_dirs:
             if d.exists() and d.is_dir():
                 sub_imgs = get_supported_image_files(d)
+                if sub_imgs:
+                    image_files = sub_imgs
+                    break
+        
+        # If still nothing, do a shallow recursive search
+        if not image_files:
+            for root, dirs, files in os.walk(str(p)):
+                # Limit depth
+                rel_root = Path(root).relative_to(p)
+                if len(rel_root.parts) > 3:
+                    dirs[:] = []
+                    continue
+                sub_imgs = get_supported_image_files(Path(root))
                 if sub_imgs:
                     image_files = sub_imgs
                     break
@@ -1919,8 +1944,9 @@ def draw_single_mask(img_p: Path, lbl_p: Path, out_path: Path, class_names: dict
                 label = class_names.get(cls_id, f"class_{cls_id}")
                 cv2.putText(img, label, (pts[0][0], pts[0][1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-    os.makedirs(out_path, exist_ok=True)
-    cv2.imwrite(str(out_path / (img_p.stem + ".jpg")), img)
+    # out_file should be the full target path including subdirectory structure
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out_file), img)
     return True
 
 def run_mask_generation_task(request: GenerateMaskRequest):
@@ -2064,11 +2090,25 @@ def run_mask_generation_task(request: GenerateMaskRequest):
 
         saved_count = 0
         for i, img_p in enumerate(image_files):
+            # Calculate where to save: preserve relative structure from img_src_path
+            try:
+                rel_p = img_p.relative_to(img_src_path)
+            except:
+                rel_p = Path(img_p.name)
+            
+            # Ensure output is .jpg
+            out_file = out_path / rel_p.with_suffix(".jpg")
+            
+            # Label might be local to labels_path, or nested if we want to mirror
             lbl_p = labels_path / f"{img_p.stem}.txt"
             
-            # Try to handle flat vs subdir labels if needed (though we resolved labels_path to be the dir containing txts)
+            # Try to handle nested labels if they exist mirroring img_src_path structure
+            if not lbl_p.exists():
+                potential_nested = labels_path / rel_p.with_suffix(".txt")
+                if potential_nested.exists():
+                    lbl_p = potential_nested
             
-            if draw_single_mask(img_p, lbl_p, out_path, class_names):
+            if draw_single_mask(img_p, lbl_p, out_file, class_names):
                 saved_count += 1
             
             app.state.task_progress["current"] = i + 1
@@ -2136,43 +2176,52 @@ def discover_labels_dir(p: Path) -> Optional[Path]:
     return None
 
 @app.get("/api/labeled/images")
-def get_labeled_images(path: str, limit: int = 50, offset: int = 0, classes: Optional[str] = None, search: Optional[str] = None):
-    print(f"Listing images in {path} with limit={limit}, offset={offset}, classes={classes}, search={search}")
+def get_labeled_images(path: str, limit: int = 50, offset: int = 0, classes: Optional[str] = None, search: Optional[str] = None, split: Optional[str] = "all"):
+    print(f"Listing images in {path} with limit={limit}, offset={offset}, classes={classes}, search={search}, split={split}")
     p = Path(path).absolute()
     if not p.exists() or not p.is_dir():
         return {"images": [], "total": 0, "offset": offset, "limit": limit}
     
     # Define root early so it's available for fallback and yaml lookups
+    original_p = p
     root, _ = get_config_identity(p)
     
     labels_dir = discover_labels_dir(p)
     if not labels_dir:
         labels_dir = root / "labels"
     
-    print(f"Using labels directory: {labels_dir}")
-    
-
+    print(f"Using labels directory: {labels_dir}")  
     
     # Load class names using the unified helper
-    # We pass 'root' because that's where config likely is, but p (dataset dir) works too
     names_list = load_classes_from_path(p) 
     class_names_map = {}
     if names_list:
         class_names_map = {i: n for i, n in enumerate(names_list)}
         print(f"Loaded {len(class_names_map)} class names using unified loader")
 
-    files = get_supported_image_files(p)
+    # Image Collection Strategy
+    files = []
     
-    # If no files found in root, check if we should look in 'images' or 'masked_images' subdir
-    if not files:
-        if (p / "masked_images").exists():
-            print(f"No images in root, redirecting to {p / 'masked_images'}")
-            p = p / "masked_images"
-            files = get_supported_image_files(p)
-        elif (p / "images").exists():
-             print(f"No images in root, redirecting to {p / 'images'}")
-             p = p / "images"
-             files = get_supported_image_files(p)
+    # Check for Split Dataset
+    possible_splits = ["train", "valid", "test", "val"]
+    is_split_dataset = False
+    for s in possible_splits:
+        if (p / s / "images").exists():
+            is_split_dataset = True
+            break
+            
+    else:
+        # Standard flat dataset: check root, then standard subdirs
+        files = get_supported_image_files(p)
+        
+        # If no files found in root, check standard subdirectories (legacy behavior)
+        if not files:
+            if (p / "images").exists():
+                 print(f"No images in root, using {p / 'images'}")
+                 files = get_supported_image_files(p / "images")
+            elif (p / "masked_images").exists():
+                print(f"No images in root, using {p / 'masked_images'}")
+                files = get_supported_image_files(p / "masked_images")
     
 
     target_classes = []
@@ -2186,24 +2235,40 @@ def get_labeled_images(path: str, limit: int = 50, offset: int = 0, classes: Opt
         files = [f for f in files if search_lower in f.name.lower()]
         print(f"Filtered by search '{search}': {len(files)} files remaining")
 
-    all_filtered_results = []
-    # If we have class filtering, we unfortunately have to scan ALL files to know the total count
-    # and to paginate correctly. 
-    # Optimization: if no classes, we can just paginate 'files' and process only those.
+    # SORTING: Always sort for consistency across different requests
+    files.sort(key=lambda x: str(x))
+
+    # PAGINATION & PROJECTION
+    # Note: files contains Path objects (absolute)
     
-    if not target_classes:
+    # If filtering by class is ON, we must scan ALL to paginate correctly
+    if target_classes:
+        print(f"Scanning {len(files)} files for class filtering...")
+        paged_files = files # We'll filter all then paginate
+    else:
+        # Optimization: Slice first, then process stats
         total = len(files)
         paged_files = files[offset:offset + limit]
-    else:
-        # Scan all to filter
-        print(f"Scanning {len(files)} files for class filtering...")
-        paged_files = files # We'll filter and then paginate manually
-            
+
     results = []
+    
+    # Helper to resolve label for an image path
+    def resolve_label_file(img_path):
+        # If split, label is in sibling 'labels' folder
+        # e.g. .../train/images/foo.jpg -> .../train/labels/foo.txt
+        if is_split_dataset:
+            # img_path parent is 'images'
+            # img_path parent parent is split dir (e.g. 'train')
+            split_root = img_path.parent.parent
+            return split_root / "labels" / f"{img_path.stem}.txt"
+        else:
+            return labels_dir / f"{img_path.stem}.txt"
+
     for f in paged_files:
         stats = {}
         # Try to read corresponding label file
-        label_file = labels_dir / f"{f.stem}.txt"
+        label_file = resolve_label_file(f)
+        
         if label_file.exists():
             try:
                 with open(label_file, 'r') as lf:
@@ -2216,7 +2281,13 @@ def get_labeled_images(path: str, limit: int = 50, offset: int = 0, classes: Opt
             except:
                 pass
         
-        item = {"name": f.name, "stats": stats}
+        # Always return path relative to the input 'path' (original_p)
+        try:
+            rel_name = str(f.relative_to(original_p))
+        except:
+            rel_name = f.name
+        
+        item = {"name": rel_name, "stats": stats}
         
         if target_classes:
             # Check if this item matches
@@ -2231,7 +2302,6 @@ def get_labeled_images(path: str, limit: int = 50, offset: int = 0, classes: Opt
             
             # 2. Check if any other requested class is present in stats
             if not match_found and stats:
-                # Filter out "Empty" from target_classes for this check to avoid confusion, though it won't match a key in stats anyway
                 real_targets = [c for c in target_classes if c != "Empty"]
                 if any(cls in real_targets for cls in stats.keys()):
                     match_found = True
@@ -2245,13 +2315,6 @@ def get_labeled_images(path: str, limit: int = 50, offset: int = 0, classes: Opt
     if target_classes:
         total = len(results)
         results = results[offset:offset + limit]
-    else:
-        # If we didn't filter by class, we already paginated 'files' if we didn't search either?
-        # WAIT: If we searched, 'files' is reduced. 
-        # If we didn't have target_classes, 'total' is len(files) (filtered). 
-        # 'paged_files' was sliced from 'files'.
-        # So 'results' corresponds to paged_files.
-        pass
 
     return {
         "images": results,
@@ -2301,17 +2364,30 @@ def filter_labeled_image(request: FilterRequest):
             print(f"Warning: Processed image {src_img} not found. Falling back to source {source_p}")
             src_img = source_p / request.image_name
         else:
-             raise HTTPException(status_code=404, detail=f"Source image {request.image_name} not found in {src_processed_dir}")
+             # NEW: Relative path support check?
+             # request.image_name might be "train/images/foo.jpg"
+             if (source_p / request.image_name).exists():
+                 src_img = source_p / request.image_name
+             else:
+                 raise HTTPException(status_code=404, detail=f"Source image {request.image_name} not found in {src_processed_dir} or {source_p}")
 
     # 3. Determine Target (Filtered Folder)
     # User said: "to the _filtered folder. there is no need to create subfolders"
-    rel_filtered = dirs_config.get("filtered", f"{project_name}_filtered") # Note: User said _filtered, but standard is often _filtered_images?
-    # Actually, let's stick to what we see in code or config. ProjectConfig default is "filtered": "images_filtered" ? No, I updated logic before?
-    # Let's check ProjectManager defaults in my memory or code. 
-    # ProjectManager defaults: "filtered": f"{name}_filtered_images" usually.
-    # User calls it "_filtered folder". I'll use the config if available, else default.
-    
-    target_dir = root / rel_filtered
+    if root.name == project_name: # Simple heuristic: if root.name IS the project name, we are likely in dataset root
+         # Stick to existing logic
+         rel_filtered = dirs_config.get("filtered", f"{project_name}_filtered")
+    else:
+         # Standalone fallback. Create filtered_images in "source_p" (the dataset root)
+         rel_filtered = "filtered_images"
+         if not (root / rel_filtered).exists() and not (root / f"{project_name}_filtered").exists():
+              # If no existing project folder, use simple one
+              target_dir = root / "filtered_images"
+         else:
+              target_dir = root / dirs_config.get("filtered", f"{project_name}_filtered")
+
+    if not 'target_dir' in locals():
+         target_dir = root / rel_filtered
+
     target_dir.mkdir(parents=True, exist_ok=True)
     
     # 4. Copy
@@ -2326,7 +2402,7 @@ def render_dataset_image(path: str, name: str):
     """
     Render a single image with annotations on-the-fly.
     path: The directory containing the image (e.g., images/ or processed/)
-    name: The filename of the image
+    name: The filename of the image (or relative path for splits e.g. train/images/foo.jpg)
     """
     img_dir = Path(path).absolute()
     img_path = img_dir / name
@@ -2334,13 +2410,49 @@ def render_dataset_image(path: str, name: str):
     if not img_path.exists():
         raise HTTPException(status_code=404, detail="Image not found")
         
-    # 1. Resolve Labels Directory
-    # Use helper or logic similar to get_labeled_images
-    root, _ = get_config_identity(img_dir)
-    labels_dir = discover_labels_dir(img_dir)
-    if not labels_dir:
-        labels_dir = root / "labels"
+    # 1. Resolve Labels Directory / Path
+    lbl_path = None
+    
+    # Check if this is a split structure (e.g. train/images/foo.jpg)
+    parts = Path(name).parts
+    if len(parts) > 1 and "images" in parts:
+         # Resolve label: replace 'images' with 'labels' in the parent path
+         try:
+             parent = img_path.parent
+             if parent.name == "images":
+                  lbl_path = parent.parent / "labels" / f"{img_path.stem}.txt"
+         except:
+             pass
+
+    if not lbl_path:
+        # Fallback to standard flattened logic
+        root, _ = get_config_identity(img_dir)
+        labels_dir = discover_labels_dir(img_dir)
+        if not labels_dir:
+            labels_dir = root / "labels"
         
+        # Check if 'name' itself has subfolders (e.g. images/foo.jpg or subset/foo.jpg)
+        name_path = Path(name)
+        if len(name_path.parts) > 1:
+            # Try to resolve mirroring the structure
+            # e.g. path=root, name=images/foo.jpg -> root/labels/foo.txt
+            # Or if name=subset/foo.jpg -> root/labels/subset/foo.txt
+            
+            # If it starts with 'images/', strip it for the label path
+            if name_path.parts[0] == "images":
+                lbl_rel_path = Path(*name_path.parts[1:]).with_suffix(".txt")
+            else:
+                lbl_rel_path = name_path.with_suffix(".txt")
+                
+            lbl_path = labels_dir / lbl_rel_path
+        else:
+            lbl_path = labels_dir / f"{img_path.stem}.txt"
+        
+        # Final desperate fallback
+        if not lbl_path.exists() and not (len(name_path.parts) > 1 and name_path.parts[0] == "images"):
+             # If we failed and it's flat name, try prefixing labels/ just in case
+             lbl_path = labels_dir / f"{img_path.stem}.txt"
+
     # 2. Load Class Names
     names_list = load_classes_from_path(img_dir)
     class_names = {}
@@ -2354,17 +2466,8 @@ def render_dataset_image(path: str, name: str):
          
     h, w = img.shape[:2]
     
-    # 4. Find Label
-    lbl_path = labels_dir / f"{img_path.stem}.txt"
-    
-    # If using splits, label might be in different folder structure?
-    # discover_labels_dir might return the root labels dir for the split if passed the split image dir?
-    if not lbl_path.exists():
-        # Try simplified split fallback: .../images/.. -> .../labels/..
-        if img_dir.name == "images":
-             lbl_path = img_dir.parent / "labels" / f"{img_path.stem}.txt"
-             
-    if lbl_path.exists():
+    # 4. Draw Annotations
+    if lbl_path and lbl_path.exists():
         with open(lbl_path, 'r') as f:
             for line in f:
                 parts = line.strip().split()
@@ -2401,8 +2504,8 @@ def render_dataset_image(path: str, name: str):
                     pass
 
     # 5. Encode to JPEG
-    res, im_png = cv2.imencode(".jpg", img)
-    return StreamingResponse(io.BytesIO(im_png.tobytes()), media_type="image/jpeg")
+    res, im_jpg = cv2.imencode(".jpg", img)
+    return StreamingResponse(io.BytesIO(im_jpg.tobytes()), media_type="image/jpeg")
 
 @app.get("/api/labeled/stats")
 def get_dataset_stats(path: str):
@@ -2761,20 +2864,25 @@ def find_image_file(dataset_root: Path, image_name: str) -> Optional[Path]:
     ]
     for c in candidates:
         if c.exists():
+            print(f"find_image_file: Found at {c}")
             return c
             
     # 2. Search recursively if not in obvious places (max depth 3)
     # Only do this if image_name doesn't already look like a subpath
     if "/" not in image_name and "\\" not in image_name:
+        print(f"find_image_file: Not found in candidates, searching recursively for {image_name}...")
         for ext in ["", ".jpg", ".png", ".jpeg", ".WEBP", ".JPG"]:
             name_to_find = image_name if not ext else f"{Path(image_name).stem}{ext}"
             # Check if we can find it by walking (limit walk)
             for root, dirs, files in os.walk(str(dataset_root)):
                 if name_to_find in files:
-                    return Path(root) / name_to_find
+                    found_p = Path(root) / name_to_find
+                    print(f"find_image_file: Found via recursion at {found_p}")
+                    return found_p
                 if root.count(os.sep) - str(dataset_root).count(os.sep) > 3:
                      dirs[:] = [] # stop recursion
     
+    print(f"find_image_file: FAILED to find {image_name} in {dataset_root}")
     return None
 
 def get_label_path(dataset_root: Path, image_name: str) -> Path:

@@ -101,6 +101,18 @@ body {
   font-size: 1.2rem;
 }
 
+.nav-header {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.05rem;
+  margin-top: 20px;
+  margin-bottom: 8px;
+  padding-left: 12px;
+  opacity: 0.6;
+}
+
 .container {
   max-width: 1000px;
   margin: 0 auto;

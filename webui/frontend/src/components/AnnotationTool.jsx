@@ -4,7 +4,7 @@ import axios from 'axios';
 const API_BASE = '/api';
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
 
-const AnnotationTool = ({ datasetPath, onPathChange, samModelPath, setSamModelPath, onBrowse, jumpToImageName, onJumpComplete, onSave }) => {
+const AnnotationTool = ({ datasetPath, selectedSplit, onPathChange, samModelPath, setSamModelPath, onBrowse, jumpToImageName, onJumpComplete, onSave }) => {
     const [images, setImages] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [loading, setLoading] = useState(false);
@@ -26,12 +26,22 @@ const AnnotationTool = ({ datasetPath, onPathChange, samModelPath, setSamModelPa
     const [scale, setScale] = useState(1);
     const [hoveredIndex, setHoveredIndex] = useState(null);
     const [imageSearchQuery, setImageSearchQuery] = useState('');
+    const [jumpInProgress, setJumpInProgress] = useState(!!jumpToImageName);
+
+    useEffect(() => {
+        if (jumpToImageName) {
+            console.log("Trace: jumpToImageName changed. Setting jumpInProgress=true");
+            setJumpInProgress(true);
+        }
+    }, [jumpToImageName]);
 
     // Fetch initial data
     useEffect(() => {
         if (!datasetPath) return;
 
         const loadInit = async () => {
+            console.log("Trace: loadInit START for path:", datasetPath);
+            setImages([]); // Clear previous images to avoid jump mismatch
             setLoading(true);
             try {
                 // Get Classes
@@ -39,8 +49,10 @@ const AnnotationTool = ({ datasetPath, onPathChange, samModelPath, setSamModelPa
                 setClasses(clsRes.data.classes);
 
                 // Get Images
-                const imgRes = await axios.get(`${API_BASE}/labeled/images?path=${encodeURIComponent(datasetPath)}&limit=10000`);
+                const splitParam = selectedSplit ? `&split=${selectedSplit}` : '';
+                const imgRes = await axios.get(`${API_BASE}/labeled/images?path=${encodeURIComponent(datasetPath)}&limit=10000${splitParam}`);
                 const imgList = imgRes.data.images || [];
+                console.log("Trace: loadInit fetched", imgList.length, "images");
                 setImages(imgList);
 
                 // Only reset to 0 if we are NOT jumping
@@ -49,33 +61,54 @@ const AnnotationTool = ({ datasetPath, onPathChange, samModelPath, setSamModelPa
                 }
             } catch (err) {
                 console.error("Error init annotation:", err);
+                if (err.response) {
+                    console.error("400 Detail:", err.response.data);
+                    alert("Initialization error: " + (err.response.data.detail || "Unknown error"));
+                }
             } finally {
                 setLoading(false);
             }
         };
         loadInit();
-    }, [datasetPath]);
+    }, [datasetPath, selectedSplit]);
 
     // Separate effect for jumping, so it works even if datasetPath doesn't change
     useEffect(() => {
         if (jumpToImageName && images.length > 0) {
+            console.log("Trace: Jump effect triggered. jumpToImageName=", jumpToImageName);
+
             const idx = images.findIndex(img => img.name === jumpToImageName);
+            console.log("Trace: findIndex result=", idx);
+
             if (idx >= 0) {
+                console.log("Trace: Setting currentIndex to", idx);
                 setCurrentIndex(idx);
+            } else {
+                console.warn("Trace: Failed to find exact image index for", jumpToImageName, ". Trying fuzzy match.");
+                // Fallback: match by basename if exact path fails
+                const basename = jumpToImageName.includes('/') ? jumpToImageName.split('/').pop() : jumpToImageName;
+                const fuzzyIdx = images.findIndex(img => img.name === basename || img.name.endsWith('/' + basename));
+                if (fuzzyIdx >= 0) {
+                    console.log("Trace: Fuzzy match found at index", fuzzyIdx);
+                    setCurrentIndex(fuzzyIdx);
+                }
             }
+            setJumpInProgress(false);
             if (onJumpComplete) onJumpComplete();
         }
     }, [jumpToImageName, images, onJumpComplete]);
 
     // Load current image and existing annotations
     useEffect(() => {
-        if (images.length === 0 || !datasetPath) {
+        if (images.length === 0 || !datasetPath || jumpInProgress) {
+            console.log("Trace: loadData SKIPPED. images.length=", images.length, "datasetPath=", datasetPath, "jumpInProgress=", jumpInProgress);
             setImageObj(null);
             setAnnotations([]);
             return;
         }
 
         const imgName = images[currentIndex].name;
+        console.log("Trace: loadData START for index", currentIndex, "name", imgName);
 
         const loadData = async () => {
             setTempPoints([]);
@@ -412,24 +445,29 @@ const AnnotationTool = ({ datasetPath, onPathChange, samModelPath, setSamModelPa
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '15px' }}>
-            <div className="glass" style={{ padding: '10px 20px', display: 'flex', alignItems: 'center', gap: '15px', borderRadius: '12px' }}>
-                <span style={{ fontWeight: 'bold' }}>Dataset Path:</span>
-                <input
-                    type="text"
-                    className="input"
-                    style={{ flex: 1, background: 'rgba(0,0,0,0.3)', color: 'white', border: '1px solid var(--border-color)', padding: '5px 12px', borderRadius: '6px' }}
-                    value={datasetPath}
-                    onChange={(e) => onPathChange(e.target.value)}
-                    placeholder="Enter dataset path..."
-                />
-                <button className="btn btn-primary" onClick={onBrowse}>Browse...</button>
-
-                {images.length > 0 && (
-                    <div style={{ marginLeft: '10px', paddingLeft: '20px', borderLeft: '1px solid rgba(255,255,255,0.1)' }}>
-                        <span style={{ opacity: 0.6, fontSize: '0.85rem' }}>Current Image: </span>
-                        <code style={{ color: 'var(--accent)' }}>{images[currentIndex].name}</code>
+            <div className="glass" style={{ padding: '10px 20px', display: 'flex', alignItems: 'center', gap: '15px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', flex: 1, gap: '4px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span style={{ fontWeight: 'bold', fontSize: '0.9rem', opacity: 0.7 }}>📂 Dataset:</span>
+                        <span style={{ fontSize: '0.9rem', fontFamily: 'monospace', color: 'var(--primary)' }}>{datasetPath}</span>
+                        {selectedSplit && selectedSplit !== 'all' && (
+                            <span style={{ marginLeft: '10px', padding: '1px 8px', background: 'var(--primary)', color: '#000', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold', textTransform: 'uppercase' }}>
+                                {selectedSplit}
+                            </span>
+                        )}
                     </div>
-                )}
+                    {images[currentIndex] && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <span style={{ fontWeight: 'bold', fontSize: '0.9rem', opacity: 0.7 }}>🖼️ File [{currentIndex + 1}/{images.length}]:</span>
+                            <span style={{ fontSize: '0.9rem', fontFamily: 'monospace', color: 'var(--accent)' }}>{images[currentIndex].name}</span>
+                        </div>
+                    )}
+                </div>
+
+                <div style={{ display: 'flex', gap: '10px' }}>
+                    <button className="btn btn-secondary" onClick={onBrowse} style={{ padding: '5px 15px' }}>Browse...</button>
+                    {jumpInProgress && <div className="spinner-small" style={{ marginLeft: '10px' }}></div>}
+                </div>
             </div>
 
             <div className="glass" style={{ padding: '10px 20px', display: 'flex', alignItems: 'center', gap: '15px', borderRadius: '12px' }}>
@@ -450,192 +488,206 @@ const AnnotationTool = ({ datasetPath, onPathChange, samModelPath, setSamModelPa
             </div>
 
             {datasetPath ? (
-                <div style={{ display: 'flex', flex: 1, gap: '20px', overflow: 'hidden' }}>
-                    {/* Toolbar */}
-                    <div className="glass" style={{ width: '60px', borderRadius: '12px', padding: '10px', display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'center' }}>
-                        {['cursor', 'box', 'polygon', 'smart'].map(tool => (
-                            <button
-                                key={tool}
-                                className={`btn ${currentTool === tool ? 'btn-primary' : ''}`}
-                                onClick={() => {
-                                    setCurrentTool(tool);
-                                    if (tool !== 'smart') {
-                                        setSamPoints([]);
-                                        setSamPreview(null);
-                                    }
-                                }}
-                                title={tool}
-                            >
-                                {tool === 'cursor' ? '👆' : tool === 'box' ? '⬜' : tool === 'polygon' ? '📐' : '✨'}
-                            </button>
-                        ))}
-                    </div>
-
-                    {/* Canvas Area */}
-                    <div ref={containerRef} className="glass" style={{ flex: 1, borderRadius: '12px', overflow: 'hidden', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000' }} onContextMenu={handleContextMenu}>
-                        {loading ? (
-                            <div style={{ color: 'white', opacity: 0.5 }}>Loading dataset...</div>
-                        ) : imageObj ? (
-                            <>
-                                <canvas
-                                    ref={canvasRef}
-                                    onMouseDown={handleMouseDown}
-                                    onMouseMove={handleMouseMove}
-                                    onMouseUp={handleMouseUp}
-                                    style={{
-                                        cursor: currentTool === 'cursor' ? 'default' : 'crosshair',
-                                        border: '1px solid rgba(255,255,255,0.2)',
-                                        boxShadow: '0 0 20px rgba(0,0,0,0.5)'
-                                    }}
-                                />
-                                <div style={{ position: 'absolute', top: '10px', right: '10px', background: 'rgba(0,0,0,0.7)', padding: '5px 10px', borderRadius: '4px', fontSize: '10px', color: 'rgba(255,255,255,0.7)', pointerEvents: 'none' }}>
-                                    {imageObj.width}x{imageObj.height} @ {(scale * 100).toFixed(1)}%
-                                </div>
-                            </>
-                        ) : (
-                            <div style={{ color: 'white', opacity: 0.5 }}>
-                                {images.length === 0 ? 'No images found' : 'No Image Selected'}
-                            </div>
-                        )}
-                    </div>
-
-                    {/* Sidebar */}
-                    <div className="glass" style={{ width: '300px', borderRadius: '12px', padding: '20px', display: 'flex', flexDirection: 'column' }}>
-                        <div style={{ marginBottom: '10px', display: 'flex', gap: '10px', alignItems: 'center' }}>
-                            <input
-                                type="text"
-                                className="input"
-                                placeholder="Go to image..."
-                                value={imageSearchQuery}
-                                onChange={(e) => {
-                                    setImageSearchQuery(e.target.value);
-                                    if (e.target.value) {
-                                        const idx = images.findIndex(img => img.name.toLowerCase().includes(e.target.value.toLowerCase()));
-                                        if (idx >= 0) setCurrentIndex(idx);
-                                    }
-                                }}
-                                style={{ flex: 1, padding: '5px' }}
-                            />
+                <div style={{ display: 'flex', gap: '20px', flex: 1, overflow: 'hidden' }}>
+                    {images.length === 0 ? (
+                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '12px', border: '1px dashed rgba(255,255,255,0.1)' }}>
+                            <div style={{ fontSize: '3rem', marginBottom: '20px' }}>📁</div>
+                            <h3 style={{ margin: '0 0 10px 0' }}>No Images Found</h3>
+                            <p style={{ opacity: 0.6, maxWidth: '400px', textAlign: 'center' }}>
+                                We couldn't find any supported image files in this directory.
+                                {selectedSplit !== 'all' && ` Check if the '${selectedSplit}' split contains images.`}
+                            </p>
+                            <button className="btn btn-secondary" onClick={onBrowse} style={{ marginTop: '20px' }}>Select Another Folder</button>
                         </div>
-                        <div style={{ marginBottom: '20px', display: 'flex', gap: '10px', alignItems: 'center' }}>
-                            <button className="btn" onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))} disabled={currentIndex === 0}>⬅️</button>
-                            <span style={{ fontSize: '0.9rem', flex: 1, textAlign: 'center' }}>
-                                {currentIndex + 1} / {images.length}
-                            </span>
-                            <button className="btn" onClick={() => setCurrentIndex(Math.min(images.length - 1, currentIndex + 1))} disabled={currentIndex >= images.length - 1}>➡️</button>
-                        </div>
-
-                        <h3 style={{ margin: '0 0 10px 0' }}>Classes</h3>
-                        <select style={{ width: '100%', padding: '10px', background: 'rgba(255,255,255,0.1)', color: 'white', border: '1px solid var(--border-color)', borderRadius: '6px' }} value={selectedClass} onChange={(e) => setSelectedClass(parseInt(e.target.value))}>
-                            {classes.map((name, i) => <option key={i} value={i}>{i}: {name}</option>)}
-                        </select>
-
-                        <h3 style={{ margin: '20px 0 10px 0' }}>Annotations ({annotations.length})</h3>
-                        <div style={{ flex: 1, overflowY: 'auto', marginBottom: '20px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', padding: '5px' }}>
-                            {annotations.length === 0 ? (
-                                <div style={{ padding: '20px', textAlign: 'center', opacity: 0.5, fontSize: '0.8rem' }}>No annotations yet</div>
-                            ) : (
-                                annotations.map((ann, i) => (
-                                    <div
-                                        key={i}
-                                        style={{
-                                            display: 'flex',
-                                            justifyContent: 'space-between',
-                                            padding: '8px',
-                                            borderBottom: '1px solid rgba(255,255,255,0.05)',
-                                            fontSize: '0.85rem',
-                                            alignItems: 'center',
-                                            background: hoveredIndex === i ? 'rgba(255,255,255,0.1)' : 'transparent',
-                                            transition: 'background 0.2s'
+                    ) : (
+                        <>
+                            {/* Toolbar */}
+                            <div className="glass" style={{ width: '60px', borderRadius: '12px', padding: '10px', display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'center' }}>
+                                {['cursor', 'box', 'polygon', 'smart'].map(tool => (
+                                    <button
+                                        key={tool}
+                                        className={`btn ${currentTool === tool ? 'btn-primary' : ''}`}
+                                        onClick={() => {
+                                            setCurrentTool(tool);
+                                            if (tool !== 'smart') {
+                                                setSamPoints([]);
+                                                setSamPreview(null);
+                                            }
                                         }}
-                                        onMouseEnter={() => setHoveredIndex(i)}
-                                        onMouseLeave={() => setHoveredIndex(null)}
+                                        title={tool}
                                     >
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                            <div style={{ width: '12px', height: '12px', borderRadius: '2px', background: COLORS[ann.class_id % COLORS.length] }}></div>
-                                            <span style={{ fontWeight: 500 }}>
-                                                {ann.type === 'box' ? 'Box' : 'Poly'}
-                                            </span>
-                                            <span style={{ opacity: 0.7 }}>
-                                                {classes[ann.class_id] || `Class ${ann.class_id}`}
-                                            </span>
-                                        </div>
-                                        <button
-                                            style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '2px 5px' }}
-                                            onClick={() => handleDelete(i)}
-                                            title="Delete annotation"
-                                        >
-                                            ✖️
-                                        </button>
-                                    </div>
-                                ))
-                            )}
-                        </div>
-
-                        {currentTool === 'polygon' && tempPoints.length > 0 && (
-                            <div style={{ marginBottom: '10px', padding: '10px', background: 'rgba(99, 102, 241, 0.2)', borderRadius: '6px', fontSize: '0.8rem', border: '1px solid rgba(99, 102, 241, 0.4)' }}>
-                                💡 Tip: <strong>Right-click</strong> to finish your polygon ({tempPoints.length} points so far)
+                                        {tool === 'cursor' ? '👆' : tool === 'box' ? '⬜' : tool === 'polygon' ? '📐' : '✨'}
+                                    </button>
+                                ))}
                             </div>
-                        )}
 
-                        {currentTool === 'smart' && (
-                            <div style={{ marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                <div style={{ padding: '10px', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '6px', fontSize: '0.8rem', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
-                                    ✨ <strong>Smart Tool</strong>: <br />
-                                    • Left-click: Add object <br />
-                                    • Right-click: Remove area
-                                </div>
-
-                                <div style={{ marginBottom: '10px' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '5px' }}>
-                                        <span>Simplification</span>
-                                        <span style={{ color: 'var(--accent)' }}>{samEpsilon.toFixed(1)}px</span>
+                            {/* Canvas Area */}
+                            <div ref={containerRef} className="glass" style={{ flex: 1, borderRadius: '12px', overflow: 'hidden', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000' }} onContextMenu={handleContextMenu}>
+                                {loading ? (
+                                    <div style={{ color: 'white', opacity: 0.5 }}>Loading dataset...</div>
+                                ) : imageObj ? (
+                                    <>
+                                        <canvas
+                                            ref={canvasRef}
+                                            onMouseDown={handleMouseDown}
+                                            onMouseMove={handleMouseMove}
+                                            onMouseUp={handleMouseUp}
+                                            style={{
+                                                cursor: currentTool === 'cursor' ? 'default' : 'crosshair',
+                                                border: '1px solid rgba(255,255,255,0.2)',
+                                                boxShadow: '0 0 20px rgba(0,0,0,0.5)'
+                                            }}
+                                        />
+                                        <div style={{ position: 'absolute', top: '10px', right: '10px', background: 'rgba(0,0,0,0.7)', padding: '5px 10px', borderRadius: '4px', fontSize: '10px', color: 'rgba(255,255,255,0.7)', pointerEvents: 'none' }}>
+                                            {imageObj.width}x{imageObj.height} @ {(scale * 100).toFixed(1)}%
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div style={{ color: 'white', opacity: 0.5 }}>
+                                        {images.length === 0 ? 'No images found' : 'No Image Selected'}
                                     </div>
+                                )}
+                            </div>
+
+                            {/* Sidebar */}
+                            <div className="glass" style={{ width: '300px', borderRadius: '12px', padding: '20px', display: 'flex', flexDirection: 'column' }}>
+                                <div style={{ marginBottom: '10px', display: 'flex', gap: '10px', alignItems: 'center' }}>
                                     <input
-                                        type="range"
-                                        min="0"
-                                        max="10"
-                                        step="0.5"
-                                        value={samEpsilon}
+                                        type="text"
+                                        className="input"
+                                        placeholder="Go to image..."
+                                        value={imageSearchQuery}
                                         onChange={(e) => {
-                                            const val = parseFloat(e.target.value);
-                                            setSamEpsilon(val);
-                                            // Re-trigger prediction if we have points
-                                            if (samPoints.length > 0) fetchSAM(samPoints);
+                                            setImageSearchQuery(e.target.value);
+                                            if (e.target.value) {
+                                                const idx = images.findIndex(img => img.name.toLowerCase().includes(e.target.value.toLowerCase()));
+                                                if (idx >= 0) setCurrentIndex(idx);
+                                            }
                                         }}
-                                        style={{ width: '100%' }}
+                                        style={{ flex: 1, padding: '5px' }}
                                     />
                                 </div>
-
-                                <div style={{ display: 'flex', gap: '8px' }}>
-                                    <button
-                                        className="btn"
-                                        style={{ flex: 1, fontSize: '0.8rem' }}
-                                        onClick={() => { setSamPoints([]); setSamPreview(null); }}
-                                    >
-                                        🧹 Clear
-                                    </button>
-                                    <button
-                                        className="btn btn-primary"
-                                        style={{ flex: 1, fontSize: '0.8rem' }}
-                                        onClick={applySAM}
-                                        disabled={!samPreview || samLoading}
-                                    >
-                                        {samLoading ? '...' : '✅ Apply'}
-                                    </button>
+                                <div style={{ marginBottom: '20px', display: 'flex', gap: '10px', alignItems: 'center' }}>
+                                    <button className="btn" onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))} disabled={currentIndex === 0}>⬅️</button>
+                                    <span style={{ fontSize: '0.9rem', flex: 1, textAlign: 'center' }}>
+                                        {currentIndex + 1} / {images.length}
+                                    </span>
+                                    <button className="btn" onClick={() => setCurrentIndex(Math.min(images.length - 1, currentIndex + 1))} disabled={currentIndex >= images.length - 1}>➡️</button>
                                 </div>
-                            </div>
-                        )}
 
-                        <button
-                            className="btn btn-primary"
-                            onClick={handleSave}
-                            style={{ marginBottom: '10px', width: '100%' }}
-                            disabled={images.length === 0}
-                        >
-                            💾 Save Labels
-                        </button>
-                    </div>
+                                <h3 style={{ margin: '0 0 10px 0' }}>Classes</h3>
+                                <select style={{ width: '100%', padding: '10px', background: 'rgba(255,255,255,0.1)', color: 'white', border: '1px solid var(--border-color)', borderRadius: '6px' }} value={selectedClass} onChange={(e) => setSelectedClass(parseInt(e.target.value))}>
+                                    {classes.map((name, i) => <option key={i} value={i}>{i}: {name}</option>)}
+                                </select>
+
+                                <h3 style={{ margin: '20px 0 10px 0' }}>Annotations ({annotations.length})</h3>
+                                <div style={{ flex: 1, overflowY: 'auto', marginBottom: '20px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', padding: '5px' }}>
+                                    {annotations.length === 0 ? (
+                                        <div style={{ padding: '20px', textAlign: 'center', opacity: 0.5, fontSize: '0.8rem' }}>No annotations yet</div>
+                                    ) : (
+                                        annotations.map((ann, i) => (
+                                            <div
+                                                key={i}
+                                                style={{
+                                                    display: 'flex',
+                                                    justifyContent: 'space-between',
+                                                    padding: '8px',
+                                                    borderBottom: '1px solid rgba(255,255,255,0.05)',
+                                                    fontSize: '0.85rem',
+                                                    alignItems: 'center',
+                                                    background: hoveredIndex === i ? 'rgba(255,255,255,0.1)' : 'transparent',
+                                                    transition: 'background 0.2s'
+                                                }}
+                                                onMouseEnter={() => setHoveredIndex(i)}
+                                                onMouseLeave={() => setHoveredIndex(null)}
+                                            >
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                    <div style={{ width: '12px', height: '12px', borderRadius: '2px', background: COLORS[ann.class_id % COLORS.length] }}></div>
+                                                    <span style={{ fontWeight: 500 }}>
+                                                        {ann.type === 'box' ? 'Box' : 'Poly'}
+                                                    </span>
+                                                    <span style={{ opacity: 0.7 }}>
+                                                        {classes[ann.class_id] || `Class ${ann.class_id}`}
+                                                    </span>
+                                                </div>
+                                                <button
+                                                    style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '2px 5px' }}
+                                                    onClick={() => handleDelete(i)}
+                                                    title="Delete annotation"
+                                                >
+                                                    ✖️
+                                                </button>
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+
+                                {currentTool === 'polygon' && tempPoints.length > 0 && (
+                                    <div style={{ marginBottom: '10px', padding: '10px', background: 'rgba(99, 102, 241, 0.2)', borderRadius: '6px', fontSize: '0.8rem', border: '1px solid rgba(99, 102, 241, 0.4)' }}>
+                                        💡 Tip: <strong>Right-click</strong> to finish your polygon ({tempPoints.length} points so far)
+                                    </div>
+                                )}
+
+                                {currentTool === 'smart' && (
+                                    <div style={{ marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                        <div style={{ padding: '10px', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '6px', fontSize: '0.8rem', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                                            ✨ <strong>Smart Tool</strong>: <br />
+                                            • Left-click: Add object <br />
+                                            • Right-click: Remove area
+                                        </div>
+
+                                        <div style={{ marginBottom: '10px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '5px' }}>
+                                                <span>Simplification</span>
+                                                <span style={{ color: 'var(--accent)' }}>{samEpsilon.toFixed(1)}px</span>
+                                            </div>
+                                            <input
+                                                type="range"
+                                                min="0"
+                                                max="10"
+                                                step="0.5"
+                                                value={samEpsilon}
+                                                onChange={(e) => {
+                                                    const val = parseFloat(e.target.value);
+                                                    setSamEpsilon(val);
+                                                    // Re-trigger prediction if we have points
+                                                    if (samPoints.length > 0) fetchSAM(samPoints);
+                                                }}
+                                                style={{ width: '100%' }}
+                                            />
+                                        </div>
+
+                                        <div style={{ display: 'flex', gap: '8px' }}>
+                                            <button
+                                                className="btn"
+                                                style={{ flex: 1, fontSize: '0.8rem' }}
+                                                onClick={() => { setSamPoints([]); setSamPreview(null); }}
+                                            >
+                                                🧹 Clear
+                                            </button>
+                                            <button
+                                                className="btn btn-primary"
+                                                style={{ flex: 1, fontSize: '0.8rem' }}
+                                                onClick={applySAM}
+                                                disabled={!samPreview || samLoading}
+                                            >
+                                                {samLoading ? '...' : '✅ Apply'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                <button
+                                    className="btn btn-primary"
+                                    onClick={handleSave}
+                                    style={{ marginBottom: '10px', width: '100%' }}
+                                    disabled={images.length === 0}
+                                >
+                                    💾 Save Labels
+                                </button>
+                            </div>
+                        </>
+                    )}
                 </div>
             ) : (
                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.5 }}>

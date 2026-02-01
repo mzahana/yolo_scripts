@@ -128,6 +128,8 @@ function App() {
 
     // Stats State
     const [statsPath, setStatsPath] = useState('');
+    const [selectedSplit, setSelectedSplit] = useState('all');
+    const [datasetSplits, setDatasetSplits] = useState([]);
 
     // Existing Datasets
 
@@ -280,31 +282,19 @@ function App() {
         return () => clearTimeout(timer);
     }, [samModelPath, projectConfig]);
 
-    // Auto-predict annotation path when dataset path changes
+    // Consolidated Path Selector for Annotation
     useEffect(() => {
-        if (projectConfig && projectPaths) {
-            // In Project mode, 'annotation' tab should point to processed images for labeling
-            // The AnnotationTool will load images from here and save labels to project/annotations
-            if (projectPaths.processed) {
-                setAnnotationPath(projectPaths.processed);
-                // Also ensure we set a default class list if available (for the tool to pick up? 
-                // AnnotationTool picks up classes from data.yaml usually, but strictly speaking 
-                // we might want to pass 'classes' prop if supported. 
-                // Currently AnnotationTool fetches classes from 'datasetPath'.
-                // We rely on 'datasetPath' (the processed folder) having a data.yaml or classes.txt?
-                // No, in project mode, classes are in project root. 
-                // The backend 'save_annotation' should handle this.
-            }
+        if (!datasetPath) {
+            setAnnotationPath('');
             return;
         }
 
-        if (datasetPath && datasetPath.trim() !== '') {
-            // Predict annotation path: <folder>_processed_labeled
-            const baseDir = datasetPath.replace(/\/+$/, '');
-            const predicted = baseDir + '_processed_labeled';
-            setAnnotationPath(predicted);
+        if (projectPaths?.processed) {
+            setAnnotationPath(projectPaths.processed);
+        } else {
+            setAnnotationPath(datasetPath);
         }
-    }, [datasetPath, projectConfig, projectPaths]);
+    }, [datasetPath, projectPaths]);
 
     // Project Mode: Handle Tab Switches to load necessary data
     useEffect(() => {
@@ -415,6 +405,8 @@ function App() {
         }
     }, [projectConfig]);
 
+    // (Effect removed, consolidated above)
+
 
     const handleLoadMaskedImages = async (path, offset = 0, append = false, isDynamic = false) => {
         try {
@@ -435,6 +427,9 @@ function App() {
             }
             if (searchQuery) {
                 url += `&search=${encodeURIComponent(searchQuery)}`;
+            }
+            if (selectedSplit && selectedSplit !== 'all') {
+                url += `&split=${encodeURIComponent(selectedSplit)}`;
             }
 
             const imagesRes = await axios.get(url);
@@ -486,6 +481,13 @@ function App() {
             showNotification('Error filtering image: ' + (err.response?.data?.detail || err.message));
         }
     };
+
+    // Reload gallery when split or searched classes change
+    useEffect(() => {
+        if (maskedPath && activeTab === 'verification') {
+            handleLoadMaskedImages(maskedPath, 0, false, !!dynamicRenderPath);
+        }
+    }, [selectedSplit]);
 
     const fetchStats = async (pathOverride = null) => {
         const targetPath = pathOverride || statsPath || labelResult?.labeled_dir;
@@ -553,6 +555,13 @@ function App() {
             setHasMasks(has_masks);
             setHasLabels(has_labels);
             setProjectConfig(config);
+
+            if (statusRes.data.is_split) {
+                setDatasetSplits(['all', 'train', 'valid', 'test']);
+            } else {
+                setDatasetSplits([]);
+            }
+            setSelectedSplit('all'); // Always reset split filter for new dataset
 
             // Fetch classes from data.yaml for filtering/extraction
             // Try labeled_dir first as it's the most likely source of truth for the gallery
@@ -653,9 +662,10 @@ function App() {
 
     const jumpToAnnotation = (imageName) => {
         // If annotation path is not set, use main dataset path
-        if (!annotationPath && datasetPath) {
+        if (!annotationPath || annotationPath !== datasetPath) {
             setAnnotationPath(datasetPath);
         }
+
         setJumpToImageName(imageName);
         setActiveTab('annotation');
     };
@@ -1357,29 +1367,43 @@ function App() {
                 </div>
 
                 <nav className="nav-links">
-                    {navItems.map(item => (
-                        <div
-                            key={item.id}
-                            className={`nav-item ${activeTab === item.id ? 'active' : ''}`}
-                            onClick={() => {
-                                if (item.id === 'stats') {
-                                    if (labelResult?.labeled_dir) {
-                                        fetchStats();
-                                    }
-                                    setActiveTab('stats');
-                                } else {
-                                    setActiveTab(item.id);
-                                }
+                    {navItems.map(item => {
+                        if (item.type === 'header') {
+                            return <div key={item.label} className="nav-header">{item.label}</div>;
+                        }
 
-                                if (item.id === 'dataset_gen' || item.id === 'processing') {
-                                    fetchDatasets();
-                                }
-                            }}
-                        >
-                            <span className="nav-icon">{item.icon}</span>
-                            <span>{item.label}</span>
-                        </div>
-                    ))}
+                        // Allow Data Inspection even without a project
+                        const isVisible = projectConfig || isStandalone || item.id === 'verification';
+                        if (!isVisible) return null;
+
+                        return (
+                            <div
+                                key={item.id}
+                                className={`nav-item ${activeTab === item.id ? 'active' : ''}`}
+                                onClick={() => {
+                                    if (item.id === 'stats') {
+                                        if (labelResult?.labeled_dir) {
+                                            fetchStats();
+                                        }
+                                        setActiveTab('stats');
+                                    } else {
+                                        // If clicking Data Inspection or Manual Annotation on a fresh start, enter standalone mode
+                                        if ((item.id === 'verification' || item.id === 'annotation') && !projectConfig) {
+                                            setIsStandalone(true);
+                                        }
+                                        setActiveTab(item.id);
+                                    }
+
+                                    if (item.id === 'dataset_gen' || item.id === 'processing') {
+                                        fetchDatasets();
+                                    }
+                                }}
+                            >
+                                <span className="nav-icon">{item.icon}</span>
+                                <span>{item.label}</span>
+                            </div>
+                        );
+                    })}
                 </nav>
 
                 <div style={{ marginTop: 'auto', padding: '20px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', fontSize: '0.8rem' }}>
@@ -1412,6 +1436,7 @@ function App() {
                     selectedLightboxImage={selectedLightboxImage}
                     onClose={() => setSelectedLightboxImage(null)}
                     maskedMountUrl={maskedMountUrl}
+                    dynamicRenderPath={dynamicRenderPath}
                     cacheBuster={cacheBuster}
                 />
 
@@ -1606,7 +1631,9 @@ function App() {
                     {activeTab === 'annotation' && (
                         <section className="glass section-card" style={{ height: 'calc(100vh - 150px)', overflow: 'hidden', padding: '10px' }}>
                             <AnnotationTool
+                                key={`${annotationPath}-${selectedSplit}`}
                                 datasetPath={annotationPath}
+                                selectedSplit={selectedSplit}
                                 onPathChange={setAnnotationPath}
                                 samModelPath={samModelPath}
                                 setSamModelPath={setSamModelPath}
@@ -1956,34 +1983,49 @@ function App() {
                                 <p style={{ color: 'var(--text-muted)', marginBottom: '30px' }}>
                                     Preview labeled results with confidence scores and bounding boxes.
                                 </p>
-                                <VerificationGallery
-                                    onJumpToAnnotation={jumpToAnnotation}
-                                    availableClasses={availableClasses}
-                                    datasetStats={datasetStats}
-                                    filterClasses={filterClasses}
-                                    setFilterClasses={setFilterClasses}
-                                    searchQuery={searchQuery}
-                                    setSearchQuery={setSearchQuery}
-                                    maskedOffset={maskedOffset}
-                                    maskedImages={maskedImages}
-                                    totalMasked={totalMasked}
-                                    isTaskRunning={isTaskRunning}
-                                    handleGenerateMasks={handleGenerateMasks}
-                                    handleRefreshGallery={handleRefreshGallery}
-                                    toggleFilterClass={toggleFilterClass}
-                                    hasLabels={hasLabels}
-                                    hasMasks={hasMasks}
-                                    taskProgress={taskProgress}
-                                    setSelectedLightboxImage={setSelectedLightboxImage}
-                                    maskedMountUrl={maskedMountUrl}
-                                    cacheBuster={cacheBuster}
-                                    handleFilterImage={handleFilterImage}
-                                    MASKED_LIMIT={MASKED_LIMIT}
-                                    handlePageChange={handlePageChange}
-                                    verificationScroll={verificationScroll}
-                                    setVerificationScroll={setVerificationScroll}
-                                    dynamicRenderPath={dynamicRenderPath}
-                                />
+                                {datasetPath ? (
+                                    <VerificationGallery
+                                        onJumpToAnnotation={jumpToAnnotation}
+                                        availableClasses={availableClasses}
+                                        datasetStats={datasetStats}
+                                        filterClasses={filterClasses}
+                                        setFilterClasses={setFilterClasses}
+                                        searchQuery={searchQuery}
+                                        setSearchQuery={setSearchQuery}
+                                        maskedOffset={maskedOffset}
+                                        maskedImages={maskedImages}
+                                        totalMasked={totalMasked}
+                                        isTaskRunning={isTaskRunning}
+                                        handleGenerateMasks={handleGenerateMasks}
+                                        handleRefreshGallery={handleRefreshGallery}
+                                        toggleFilterClass={toggleFilterClass}
+                                        hasLabels={hasLabels}
+                                        hasMasks={hasMasks}
+                                        taskProgress={taskProgress}
+                                        setSelectedLightboxImage={setSelectedLightboxImage}
+                                        maskedMountUrl={maskedMountUrl}
+                                        cacheBuster={cacheBuster}
+                                        handleFilterImage={handleFilterImage}
+                                        MASKED_LIMIT={MASKED_LIMIT}
+                                        handlePageChange={handlePageChange}
+                                        verificationScroll={verificationScroll}
+                                        setVerificationScroll={setVerificationScroll}
+                                        dynamicRenderPath={dynamicRenderPath}
+                                        selectedSplit={selectedSplit}
+                                        onSplitChange={setSelectedSplit}
+                                        datasetSplits={datasetSplits}
+                                    />
+                                ) : (
+                                    <div style={{ padding: '80px 40px', textAlign: 'center', background: 'rgba(255,255,255,0.02)', borderRadius: '16px', border: '2px dashed var(--border-color)' }}>
+                                        <div style={{ fontSize: '1.2rem', marginBottom: '20px', opacity: 0.7 }}>No dataset selected for inspection.</div>
+                                        <button className="btn btn-primary" onClick={() => openFileBrowser('dataset', 'dir')}>
+                                            📁 Select Dataset Directory
+                                        </button>
+                                        <p style={{ marginTop: '15px', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                                            Choose a YOLO dataset folder (contains images/ and labels/ or train/val/test splits)
+                                        </p>
+                                    </div>
+                                )}
                             </section>
                         )
                     }

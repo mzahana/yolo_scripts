@@ -27,7 +27,10 @@ const VerificationGallery = ({
     handlePageChange,
     verificationScroll,
     setVerificationScroll,
-    dynamicRenderPath // New prop for dynamic rendering source path
+    dynamicRenderPath, // New prop for dynamic rendering source path
+    selectedSplit,
+    onSplitChange,
+    datasetSplits = []
 }) => {
     // Use labels classes if available
     const rawClasses = availableClasses.length > 0 ? availableClasses : (datasetStats?.class_stats?.map(s => s.name) || []);
@@ -66,6 +69,22 @@ const VerificationGallery = ({
                             </button>
                         )}
                     </div>
+
+                    {/* Split Selector (if split dataset) */}
+                    {datasetSplits.length > 0 && (
+                        <div style={{ marginLeft: '10px' }}>
+                            <select
+                                className="input"
+                                value={selectedSplit}
+                                onChange={(e) => onSplitChange(e.target.value)}
+                                style={{ width: '120px', padding: '8px 12px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'white' }}
+                            >
+                                {datasetSplits.map(s => (
+                                    <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
+                                ))}
+                            </select>
+                        </div>
+                    )}
 
                     {/* Search Input */}
                     <div style={{ flex: 1, margin: '0 20px', maxWidth: '300px' }}>

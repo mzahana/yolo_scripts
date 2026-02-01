@@ -1,12 +1,19 @@
 import React from 'react';
 
-const LightboxModal = ({ selectedLightboxImage, onClose, maskedMountUrl, cacheBuster }) => {
+const LightboxModal = ({ selectedLightboxImage, onClose, maskedMountUrl, dynamicRenderPath, cacheBuster }) => {
     if (!selectedLightboxImage) return null;
+
+    const imgSrc = maskedMountUrl
+        ? `${maskedMountUrl}/${selectedLightboxImage.name}?t=${cacheBuster}`
+        : (dynamicRenderPath
+            ? `/api/dataset/render_image?path=${encodeURIComponent(dynamicRenderPath)}&name=${selectedLightboxImage.name}&t=${cacheBuster}`
+            : '');
+
     return (
         <div className="modal-overlay" onClick={onClose} style={{ background: 'rgba(0,0,0,0.9)', zIndex: 2000 }}>
             <div className="lightbox-content" onClick={e => e.stopPropagation()} style={{ position: 'relative', maxWidth: '90vw', maxHeight: '90vh' }}>
                 <img
-                    src={`${maskedMountUrl}/${selectedLightboxImage.name}?t=${cacheBuster}`}
+                    src={imgSrc}
                     style={{ width: '100%', height: 'auto', borderRadius: '12px', boxShadow: '0 0 40px rgba(0,0,0,0.5)' }}
                     alt="Enlarged"
                 />
