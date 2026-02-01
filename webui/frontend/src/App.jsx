@@ -53,6 +53,7 @@ function App() {
     const [maskedMountUrl, setMaskedMountUrl] = useState('');
     const [maskedOffset, setMaskedOffset] = useState(0);
     const [totalMasked, setTotalMasked] = useState(0);
+    const [dynamicRenderPath, setDynamicRenderPath] = useState(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [projectConfig, setProjectConfig] = useState(null);
     const [projectPaths, setProjectPaths] = useState(null);
@@ -348,13 +349,28 @@ function App() {
             }
         }
 
-
         if (activeTab === 'verification') {
-            // Data Inspection: Load masked images from project
-            if (projectPaths.masked) {
+            // Data Inspection logic
+            console.log("Trace Verification: datasetPath=", datasetPath, "masked=", !!projectPaths?.masked, "hasMasks=", hasMasks, "hasLabels=", hasLabels, "dynamic=", !!dynamicRenderPath);
+
+            // 1. Try Loading Static Masked Images
+            // Fix: Only auto-load static masks if they actually exist (hasMasks)
+            if (projectPaths.masked && hasMasks) {
+                console.log("Trace: Attempting Static Load");
                 // Fix: Only load if path changed or empty (Prevent Reset)
-                if (projectPaths.masked !== maskedPath || maskedImages.length === 0) {
+                // AND ensure we aren't currently using dynamic rendering (fallback)
+                if (!dynamicRenderPath && (projectPaths.masked !== maskedPath || maskedImages.length === 0)) {
+                    console.log("Trace: Triggering handleLoadMaskedImages (Static)");
                     handleLoadMaskedImages(projectPaths.masked);
+                }
+            }
+            // 2. If no static masks, but we have labels, force Dynamic Mode
+            else if (hasLabels) {
+                const imgSource = projectPaths.processed || datasetPath;
+                if (imgSource && (imgSource !== maskedPath || maskedImages.length === 0)) {
+                    // Only trigger if we haven't already loaded this path
+                    setDynamicRenderPath(imgSource);
+                    handleLoadMaskedImages(imgSource, 0, false, true);
                 }
             }
         }
@@ -362,7 +378,7 @@ function App() {
         if (activeTab === 'stats') {
             fetchDatasets();
         }
-    }, [activeTab, projectConfig, projectPaths]);
+    }, [activeTab, projectConfig, projectPaths, hasLabels, hasMasks, dynamicRenderPath]); // Added dependencies
 
     // Update scaledDisplay when crop or sampleImage changes
     useEffect(() => {
@@ -400,11 +416,15 @@ function App() {
     }, [projectConfig]);
 
 
-    const handleLoadMaskedImages = async (path, offset = 0, append = false) => {
+    const handleLoadMaskedImages = async (path, offset = 0, append = false, isDynamic = false) => {
         try {
             if (offset === 0) {
-                const mountRes = await axios.post(`${API_BASE}/mount?name=masked&path=${encodeURIComponent(path)}`);
-                setMaskedMountUrl(mountRes.data.url);
+                if (isDynamic) {
+                    setMaskedMountUrl(null);
+                } else {
+                    const mountRes = await axios.post(`${API_BASE}/mount?name=masked&path=${encodeURIComponent(path)}`);
+                    setMaskedMountUrl(mountRes.data.url);
+                }
                 setMaskedPath(path);
                 setCacheBuster(Date.now()); // Update cache buster on new path load
             }
@@ -425,6 +445,18 @@ function App() {
             }
             setTotalMasked(imagesRes.data.total);
             setMaskedOffset(offset);
+
+            // Fallback: If static load returned 0 images, but we have labels, switch to dynamic
+            if (!isDynamic && imagesRes.data.total === 0 && hasLabels) {
+                const imgSource = projectPaths?.processed || datasetPath;
+                if (imgSource) {
+                    setDynamicRenderPath(imgSource);
+                    setMaskedPath(imgSource); // IMPORTANT: Update maskedPath so filters use this new path
+                    // Recursively call with dynamic mode
+                    handleLoadMaskedImages(imgSource, 0, false, true);
+                    showNotification('No static masks found. Switched to dynamic visualization.');
+                }
+            }
         } catch (err) {
             console.error('Error loading masked images:', err);
         }
@@ -433,7 +465,7 @@ function App() {
     const handlePageChange = (newOffset) => {
         const path = maskedPath || labelResult?.masked_dir;
         if (path) {
-            handleLoadMaskedImages(path, newOffset, false);
+            handleLoadMaskedImages(path, newOffset, false, !!dynamicRenderPath);
             // Reset scroll to top when changing pages
             setVerificationScroll(0);
             const scrollContainer = document.querySelector('.main-content');
@@ -488,6 +520,7 @@ function App() {
     };
 
     const loadDatasetInfo = async () => {
+        console.log("Trace: loadDatasetInfo START. Path:", datasetPath);
         // Reset state for new dataset
         setDatasetInfo(null);
         setSampleImage(null);
@@ -500,6 +533,7 @@ function App() {
         setIsTaskRunning(false);
         setHasMasks(false); // Reset hasMasks
         setHasLabels(false);
+        setDynamicRenderPath(null);
         setProjectConfig(null);
 
         try {
@@ -513,6 +547,7 @@ function App() {
 
             // Check for existing processing/labeling
             const statusRes = await axios.get(`${API_BASE}/dataset/status?path=${encodeURIComponent(datasetPath)}`);
+            console.log("Trace loadDatasetInfo: path=", datasetPath, "status=", statusRes.data);
             const { processed_dir, labeled_dir, labels_root, has_labels, has_masks, config } = statusRes.data;
 
             setHasMasks(has_masks);
@@ -596,7 +631,14 @@ function App() {
                     handleLoadMaskedImages(labeled_dir);
                     showNotification('Found existing labeled data and auto-loaded verification gallery');
                 } else if (has_labels) {
-                    showNotification('Found existing labels. You can generate masked images in the Verification tab.');
+                    const imgSource = processed_dir || datasetPath;
+                    if (imgSource) {
+                        setDynamicRenderPath(imgSource);
+                        handleLoadMaskedImages(imgSource, 0, false, true);
+                        showNotification('Found existing labels. Loaded dynamic visualization.');
+                    } else {
+                        showNotification('Found existing labels. You can generate masked images in the Verification tab.');
+                    }
                 }
             } else if (processed_dir) {
                 showNotification('Found existing processed dataset');
@@ -1123,7 +1165,7 @@ function App() {
     const handleRefreshGallery = () => {
         if (maskedPath) {
             setCacheBuster(Date.now());
-            handleLoadMaskedImages(maskedPath);
+            handleLoadMaskedImages(maskedPath, 0, false, !!dynamicRenderPath);
             showNotification('Refreshed gallery metadata');
         }
     };
@@ -1262,15 +1304,26 @@ function App() {
 
     const toggleFilterClass = (cls) => {
         setFilterClasses(prev => {
-            const next = prev.includes(cls) ? prev.filter(c => c !== cls) : [...prev, cls];
-            return next;
+            if (prev.includes(cls)) {
+                return prev.filter(c => c !== cls);
+            } else {
+                return [...prev, cls];
+            }
         });
     };
+
+    // Load Dataset Info when path changes
+    useEffect(() => {
+        if (datasetPath) {
+            console.log("Trace: useEffect triggered by datasetPath:", datasetPath);
+            loadDatasetInfo();
+        }
+    }, [datasetPath]);
 
     // Reload gallery when filter or search changes
     useEffect(() => {
         if (maskedPath) {
-            handleLoadMaskedImages(maskedPath);
+            handleLoadMaskedImages(maskedPath, 0, false, !!dynamicRenderPath);
         }
     }, [filterClasses, searchQuery]);
 
@@ -1929,6 +1982,7 @@ function App() {
                                     handlePageChange={handlePageChange}
                                     verificationScroll={verificationScroll}
                                     setVerificationScroll={setVerificationScroll}
+                                    dynamicRenderPath={dynamicRenderPath}
                                 />
                             </section>
                         )

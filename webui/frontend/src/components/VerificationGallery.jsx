@@ -4,7 +4,7 @@ import ProgressBar from './ProgressBar';
 const VerificationGallery = ({
     availableClasses,
     datasetStats,
-    filterClasses,
+    filterClasses = [],
     setFilterClasses,
     searchQuery,
     setSearchQuery,
@@ -26,7 +26,8 @@ const VerificationGallery = ({
     MASKED_LIMIT,
     handlePageChange,
     verificationScroll,
-    setVerificationScroll
+    setVerificationScroll,
+    dynamicRenderPath // New prop for dynamic rendering source path
 }) => {
     // Use labels classes if available
     const rawClasses = availableClasses.length > 0 ? availableClasses : (datasetStats?.class_stats?.map(s => s.name) || []);
@@ -192,7 +193,8 @@ const VerificationGallery = ({
                                     onClick={() => setSelectedLightboxImage(img)}
                                 >
                                     <img
-                                        src={`${maskedMountUrl}/${img.name}?t=${cacheBuster}`}
+                                        src={maskedMountUrl ? `${maskedMountUrl}/${img.name}?t=${cacheBuster}` : (dynamicRenderPath ? `/api/dataset/render_image?path=${encodeURIComponent(dynamicRenderPath)}&name=${img.name}&t=${cacheBuster}` : '')}
+
                                         style={{ width: '100%', height: 'auto', display: 'block', transition: 'transform 0.3s' }}
                                         className="gallery-img"
                                         alt={img.name}

@@ -19,6 +19,8 @@ from export_manager import export_manager
 from export_manager import export_manager
 from dataset_tools_manager import DatasetToolsManager
 from data_augmentation_manager import DataAugmentationManager
+from fastapi.responses import StreamingResponse
+import io
 import torch
 
 # Add the scripts directory to path to import existing logic
@@ -578,19 +580,21 @@ def get_dataset_status(path: str):
     # 2. Add legacy and explicit paths
     labeled_dirs = candidates + [
         p.parent / f"{dataset_name}_masked_images",
-        processed_dir / f"{dataset_name}_masked_images" if processed_dir else p, # dummy fallback
+        processed_dir / f"{dataset_name}_masked_images" if processed_dir else None,
         p / f"{dataset_name}_masked_images",
         p.parent / f"{dataset_name}_labeled",
-        processed_dir / f"{dataset_name}_labeled" if processed_dir else p,
+        processed_dir / f"{dataset_name}_labeled" if processed_dir else None,
         p / f"{dataset_name}_labeled",
         # Legacy non-prefixed versions
         p.parent / "masked_images",
-        processed_dir / "masked_images" if processed_dir else p,
+        processed_dir / "masked_images" if processed_dir else None,
         p / "masked_images",
         p.parent / "labeled",
-        processed_dir / "labeled" if processed_dir else p,
+        processed_dir / "labeled" if processed_dir else None,
         p / "labeled"
     ]
+    # Filter out None values
+    labeled_dirs = [x for x in labeled_dirs if x is not None]
     
     # Deduplicate while preserving order
     seen = set()
@@ -604,7 +608,7 @@ def get_dataset_status(path: str):
         if ld.exists() and ld.is_dir():
             # Check for files in root
             files = get_supported_image_files(ld)
-            if files:
+            if len(files) > 0:
                 found_labeled = str(ld.absolute())
                 has_masks = True
                 break
@@ -614,7 +618,7 @@ def get_dataset_status(path: str):
                 sub_dir = ld / sub
                 if sub_dir.exists() and sub_dir.is_dir():
                     sub_files = get_supported_image_files(sub_dir)
-                    if sub_files:
+                    if len(sub_files) > 0:
                         found_labeled = str(sub_dir.absolute())
                         has_masks = True
                         break
@@ -636,23 +640,13 @@ def get_dataset_status(path: str):
         if p_ann.exists():
             labels_root = str(p_ann.absolute())
 
-    # B. If not in config, try robustness
+    # B. If not in config, try robustness using discover_labels_dir helper
     if not labels_root:
-        # NEW: Try to find labels in the robustly discovered candidate directories first
-        for ld in labeled_dirs:
-            # If ld is literally a labels folder
-            if ld.name == "labels" and ld.is_dir():
-                labels_root = str(ld.absolute())
-                break
-            # If it's a labeled root, check common subfolders
-            for sub in ["labels", "labels/train", "labels/val", "labeled/labels"]:
-                sub_p = ld / sub
-                if sub_p.exists() and sub_p.is_dir():
-                    labels_root = str(sub_p.absolute())
-                    break
-            if labels_root:
-                break
- 
+        discovered = discover_labels_dir(p)
+        if discovered:
+            labels_root = str(discovered.absolute())
+            
+    
     # C. Fallback to current/parent if not found in candidates or config
     if not labels_root:
         # Determine identifying prefix by stripping ALL technical suffixes
@@ -881,6 +875,24 @@ def get_sample_image(path: str):
         raise HTTPException(status_code=400, detail="Invalid path")
     
     image_files = get_supported_image_files(p)
+    
+    if not image_files:
+        # Fallback: check standard subdirectories
+        root_p, identity = get_config_identity(p)
+        potential_dirs = [
+            p / "images",
+            p / "masked_images",
+            p / f"{identity}_processed_images",
+            p / "processed_images"
+        ]
+        
+        for d in potential_dirs:
+            if d.exists() and d.is_dir():
+                sub_imgs = get_supported_image_files(d)
+                if sub_imgs:
+                    image_files = sub_imgs
+                    break
+    
     if not image_files:
         raise HTTPException(status_code=404, detail="No images found")
     
@@ -1111,9 +1123,29 @@ def autolabel_single_image(request: AutoLabelSingleRequest):
         raise HTTPException(status_code=400, detail=f"Model path does not exist: {request.model_path}")
 
     # Verify image exists
-    target_image = img_dir / request.image_name
-    if not target_image.exists():
-        raise HTTPException(status_code=404, detail="Image not found in dataset directory")
+    p = img_dir # Use 'p' for consistency with other functions that might modify it
+    files = get_supported_image_files(p)
+
+    # If no files found in root, check standard subdirectories
+    if not files:
+        root_p, identity = get_config_identity(p)
+        potential_dirs = [
+            p / "images",
+            p / "masked_images",
+            p / f"{identity}_processed_images",
+            p / "processed_images"
+        ]
+        
+        for d in potential_dirs:
+            if d.exists() and d.is_dir():
+                sub_files = get_supported_image_files(d)
+                if sub_files:
+                    files = sub_files
+                    p = d # Update path to point to where images were found
+                    break
+    
+    if not files:
+        raise HTTPException(status_code=404, detail="No images found in dataset directory")
 
     try:
         # Initialize inferencer for single folder structure (usually what we want for webui)
@@ -2080,6 +2112,7 @@ def discover_labels_dir(p: Path) -> Optional[Path]:
     
     candidates = [
         p / "labels", # Current path's labels subfolder
+        p / "annotations", # Current path's annotations subfolder
         root / "annotations", # Project-standard annotations folder
         root / f"{identity}_datasets" / "labels",
         root / f"{identity}_labeled" / "labels",
@@ -2287,6 +2320,89 @@ def filter_labeled_image(request: FilterRequest):
     shutil.copy2(src_img, dest_path)
     
     return {"status": "ok", "message": f"Copied to {target_dir.name}"}
+
+@app.get("/api/dataset/render_image")
+def render_dataset_image(path: str, name: str):
+    """
+    Render a single image with annotations on-the-fly.
+    path: The directory containing the image (e.g., images/ or processed/)
+    name: The filename of the image
+    """
+    img_dir = Path(path).absolute()
+    img_path = img_dir / name
+    
+    if not img_path.exists():
+        raise HTTPException(status_code=404, detail="Image not found")
+        
+    # 1. Resolve Labels Directory
+    # Use helper or logic similar to get_labeled_images
+    root, _ = get_config_identity(img_dir)
+    labels_dir = discover_labels_dir(img_dir)
+    if not labels_dir:
+        labels_dir = root / "labels"
+        
+    # 2. Load Class Names
+    names_list = load_classes_from_path(img_dir)
+    class_names = {}
+    if names_list:
+        class_names = {i: n for i, n in enumerate(names_list)}
+        
+    # 3. Read Image
+    img = cv2.imread(str(img_path))
+    if img is None:
+         raise HTTPException(status_code=500, detail="Failed to read image")
+         
+    h, w = img.shape[:2]
+    
+    # 4. Find Label
+    lbl_path = labels_dir / f"{img_path.stem}.txt"
+    
+    # If using splits, label might be in different folder structure?
+    # discover_labels_dir might return the root labels dir for the split if passed the split image dir?
+    if not lbl_path.exists():
+        # Try simplified split fallback: .../images/.. -> .../labels/..
+        if img_dir.name == "images":
+             lbl_path = img_dir.parent / "labels" / f"{img_path.stem}.txt"
+             
+    if lbl_path.exists():
+        with open(lbl_path, 'r') as f:
+            for line in f:
+                parts = line.strip().split()
+                if not parts: continue
+                
+                try:
+                    cls_id = int(parts[0])
+                    coords = [float(x) for x in parts[1:]]
+                    
+                    # Color
+                    colors = [(0,255,0), (0,0,255), (255,0,0), (0,255,255), (255,255,0), (255,0,255)]
+                    color = colors[cls_id % len(colors)]
+                    
+                    label = class_names.get(cls_id, f"class_{cls_id}")
+                    
+                    if len(coords) == 4:
+                        # Bounding Box
+                        cx, cy, dw, dh = coords
+                        x1 = int((cx - dw/2) * w)
+                        y1 = int((cy - dh/2) * h)
+                        x2 = int((cx + dw/2) * w)
+                        y2 = int((cy + dh/2) * h)
+                        cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+                        cv2.putText(img, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                    elif len(coords) >= 6:
+                        # Polygon
+                        pts = []
+                        for j in range(0, len(coords), 2):
+                            pts.append([int(coords[j] * w), int(coords[j+1] * h)])
+                        pts = np.array(pts, np.int32)
+                        cv2.polylines(img, [pts], True, color, 2)
+                        cv2.putText(img, label, (pts[0][0], pts[0][1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                except ValueError:
+                    pass
+
+    # 5. Encode to JPEG
+    res, im_png = cv2.imencode(".jpg", img)
+    return StreamingResponse(io.BytesIO(im_png.tobytes()), media_type="image/jpeg")
 
 @app.get("/api/labeled/stats")
 def get_dataset_stats(path: str):
