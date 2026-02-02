@@ -90,7 +90,7 @@ const DataAugmentationTool = ({
 
     const handleFetchClasses = async (path) => {
         try {
-            const res = await axios.get(`http://localhost:8000/api/dataset/classes`, { params: { path } });
+            const res = await axios.get(`/api/dataset/classes`, { params: { path } });
             if (res.data.classes) {
                 setAvailableClasses(res.data.classes);
                 // Auto-select all by default if none selected
@@ -101,7 +101,7 @@ const DataAugmentationTool = ({
 
     const fetchStats = async (path) => {
         try {
-            const res = await axios.get(`http://localhost:8000/api/augmentation/stats`, { params: { path } });
+            const res = await axios.get(`/api/augmentation/stats`, { params: { path } });
             setStats(res.data);
         } catch (err) { console.error(err); }
     };
@@ -117,7 +117,7 @@ const DataAugmentationTool = ({
         const formData = new FormData();
         formData.append("file", file);
         try {
-            const res = await axios.post("http://localhost:8000/api/augmentation/upload_background", formData);
+            const res = await axios.post("/api/augmentation/upload_background", formData);
             setBackgroundPath(res.data.path);
             setBackgroundName(file.name);
             showNotification("Background uploaded", "success");
@@ -134,7 +134,7 @@ const DataAugmentationTool = ({
         setIsLoadingSample(true);
         try {
             // First draw the "Original" sample (no augs)
-            const res = await axios.post("http://localhost:8000/api/augmentation/sample", {
+            const res = await axios.post("/api/augmentation/sample", {
                 dataset_path: localDatasetPath,
                 class_ids: selectedClasses,
                 background_path: backgroundPath
@@ -168,7 +168,7 @@ const DataAugmentationTool = ({
                 contrast_range: params.contrast_range || null
             };
 
-            const res = await axios.post("http://localhost:8000/api/augmentation/apply_preview", payload);
+            const res = await axios.post("/api/augmentation/apply_preview", payload);
             setPreviewImage(res.data.image);
         } catch (err) {
             console.error(err);
@@ -264,7 +264,7 @@ const DataAugmentationTool = ({
         };
 
         try {
-            const res = await axios.post("http://localhost:8000/api/augmentation/generate", payload);
+            const res = await axios.post("/api/augmentation/generate", payload);
             setIsTaskRunning(true); // Start polling in App.jsx
             showNotification(`Started! Output: ${res.data.output_path}`, "success");
         } catch (err) {
