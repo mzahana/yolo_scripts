@@ -2210,6 +2210,22 @@ def get_labeled_images(path: str, limit: int = 50, offset: int = 0, classes: Opt
             is_split_dataset = True
             break
             
+    if is_split_dataset:
+         print(f"Detected split dataset. Split filter: {split}")
+         for s in possible_splits:
+             # Skip if we are filtering for a specific split
+             if split and split != "all" and split != s:
+                 # Special case: normalize val/valid
+                 if split in ["val", "valid"] and s in ["val", "valid"]:
+                     pass # Don't skip if both are validation
+                 else:
+                     continue
+                     
+             s_img_dir = p / s / "images"
+             if s_img_dir.exists():
+                 # Collect images keeping relative path structure
+                 sub_files = get_supported_image_files(s_img_dir)
+                 files.extend(sub_files)
     else:
         # Standard flat dataset: check root, then standard subdirs
         files = get_supported_image_files(p)
@@ -2392,6 +2408,10 @@ def filter_labeled_image(request: FilterRequest):
     
     # 4. Copy
     dest_path = target_dir / request.image_name
+    
+    # Ensure nested subdirectories exist (e.g. train/images/)
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    
     print(f"Copying {src_img} to {dest_path}")
     shutil.copy2(src_img, dest_path)
     
