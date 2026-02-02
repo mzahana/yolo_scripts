@@ -14,7 +14,7 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 usage() {
-    echo "Usage: ./webui.sh {start|stop|restart} [--venv /path/to/venv]"
+    echo "Usage: ./webui.sh {start|stop|restart} [--venv /path/to/venv] [--port PORT]"
     exit 1
 }
 
@@ -27,9 +27,12 @@ shift
 
 # Parse Arguments
 VENV_PATH=""
+FRONTEND_PORT="3000"
+
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --venv) VENV_PATH="$2"; shift ;;
+        --port) FRONTEND_PORT="$2"; shift ;;
         *) echo "Unknown parameter: $1"; usage ;;
     esac
     shift
@@ -65,9 +68,9 @@ start() {
     if [ -f "$FRONTEND_PID_FILE" ] && kill -0 $(cat "$FRONTEND_PID_FILE") 2>/dev/null; then
         echo "Frontend is already running (PID: $(cat $FRONTEND_PID_FILE))"
     else
-        echo "Starting Frontend..."
+        echo "Starting Frontend on port $FRONTEND_PORT..."
         cd "$FRONTEND_DIR" || exit
-        nohup npm run dev -- --host > "../$FRONTEND_LOG" 2>&1 &
+        nohup npm run dev -- --host --port $FRONTEND_PORT > "../$FRONTEND_LOG" 2>&1 &
         echo $! > "../$FRONTEND_PID_FILE"
         cd ..
         echo "Frontend started (PID: $(cat $FRONTEND_PID_FILE))"
@@ -97,20 +100,44 @@ stop() {
     # Stop Frontend
     if [ -f "$FRONTEND_PID_FILE" ]; then
         PID=$(cat "$FRONTEND_PID_FILE")
-        # For npm, it might spawn child processes (vite).
-        # We might need to kill the process group or hope vite dies with parent.
-        # Usually npm run dev spawns vite. PID is npm or vite.
         if kill -0 "$PID" 2>/dev/null; then
-            # Try to kill process group to ensure children die
-            pkill -P "$PID" 2>/dev/null
+            echo "Stopping Frontend (PID: $PID)..."
+            
+            # Recursive function to kill descendants
+            kill_descendants() {
+                local p=$1
+                local children=$(pgrep -P "$p")
+                for child in $children; do
+                    kill_descendants "$child"
+                done
+                if [ "$p" != "$PID" ]; then
+                    kill "$p" 2>/dev/null
+                fi
+            }
+            
+            # Kill descendants first
+            kill_descendants "$PID"
+            
+            # Kill the main process
             kill "$PID"
-            echo "Frontend stopped (PID: $PID)"
+            echo "Frontend stopped."
         else
             echo "Frontend process $PID not found."
         fi
         rm "$FRONTEND_PID_FILE"
     else
         echo "Frontend PID file not found."
+    fi
+
+    # Fallback: Check if port is still in use and offer to kill?
+    # Or just kill it if we are sure?
+    # Let's check the port provided (default 3000 or --port arg)
+    if lsof -i :"$FRONTEND_PORT" -t >/dev/null 2>&1; then
+        echo "Warning: Port $FRONTEND_PORT is still in use."
+        PID=$(lsof -i :"$FRONTEND_PORT" -t | head -n 1)
+        echo "Killing orphaned process on port $FRONTEND_PORT (PID: $PID)..."
+        kill -9 "$PID" 2>/dev/null
+        echo "Port $FRONTEND_PORT cleared."
     fi
 }
 

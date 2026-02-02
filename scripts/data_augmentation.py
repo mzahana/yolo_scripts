@@ -378,6 +378,7 @@ class DataAugmentor:
                     
                     new_coords[:, 0] /= image_w
                     new_coords[:, 1] /= image_h
+                    new_coords = np.clip(new_coords, 0.0, 1.0)
                     new_coords = new_coords.reshape(-1)
                     aug_labels.append(f"{obj_class_id} {' '.join(map(str, new_coords))}")
 
@@ -415,6 +416,7 @@ class DataAugmentor:
                     new_coords = DataAugmentor.transform_coordinates(coords_relative, rotation_matrix, scale_factor, translation)
                     new_coords[:, 0] /= image_w
                     new_coords[:, 1] /= image_h
+                    new_coords = np.clip(new_coords, 0.0, 1.0)
                     new_coords = new_coords.reshape(-1)
 
                     aug_image_name = f"{os.path.splitext(image_name)[0]}_c{obj_class_id}_obj{obj_idx}_aug_{i}.jpg"
@@ -586,6 +588,7 @@ class DataAugmentor:
                     new_coords = DataAugmentor.transform_coordinates(coords_relative, rotation_matrix, scale_factor, translation)
                     new_coords[:, 0] /= bg_w
                     new_coords[:, 1] /= bg_h
+                    new_coords = np.clip(new_coords, 0.0, 1.0)
                     new_coords = new_coords.reshape(-1)
                     
                     aug_labels_for_this_image.append(f"{obj_cid} {' '.join(map(str, new_coords))}")

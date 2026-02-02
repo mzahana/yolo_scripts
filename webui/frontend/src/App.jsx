@@ -661,9 +661,14 @@ function App() {
     };
 
     const jumpToAnnotation = (imageName) => {
-        // If annotation path is not set, use main dataset path
-        if (!annotationPath || annotationPath !== datasetPath) {
-            setAnnotationPath(datasetPath);
+        // Fix: Don't blindly reset to datasetPath. Use project paths if available.
+        // This ensures we jump to the correct folder (e.g. processed) where images actually exist.
+        if (!annotationPath || annotationPath !== (projectPaths?.processed || datasetPath)) {
+            if (projectPaths?.processed) {
+                setAnnotationPath(projectPaths.processed);
+            } else {
+                setAnnotationPath(datasetPath);
+            }
         }
 
         setJumpToImageName(imageName);

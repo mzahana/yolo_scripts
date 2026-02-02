@@ -25,6 +25,13 @@ npm run dev
 ```
 Access the UI at: `http://localhost:3000`
 
+### 4. Alternative: Using the Helper Script
+You can use `webui.sh` to manage services (start/stop) and configure the port:
+```bash
+cd webui
+./webui.sh start --port 4000
+```
+
 ---
 
 ## 🏗 Project Structure & Workflow
