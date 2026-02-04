@@ -11,6 +11,7 @@ def run_training(config):
     try:
         # Change CWD to dataset directory so checks/downloads happen there
         data_config_path = config.get("data")
+        dataset_dir = None
         if data_config_path:
             try:
                 # data_config_path is likely /path/to/dataset/data.yaml
@@ -38,9 +39,12 @@ def run_training(config):
         
         # Ensure project and name are set if not provided, to keep results organized
         if "project" not in train_args:
-            # If project is relative, it will now be relative to the NEW CWD (dataset dir)
-            # which is what we want (e.g. runs/detect inside dataset dir)
-            train_args["project"] = "runs/detect"
+            # FORCE ABSOLUTE PATH based on dataset_dir if available
+            task_name = config.get("task", "detect")
+            if dataset_dir:
+                 train_args["project"] = str(dataset_dir / "runs" / task_name)
+            else:
+                 train_args["project"] = f"runs/{task_name}"
         if "name" not in train_args:
             train_args["name"] = "train"
             
