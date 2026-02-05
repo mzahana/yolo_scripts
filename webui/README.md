@@ -14,7 +14,19 @@ sudo apt update
 sudo apt install python3 python3-venv python3-pip nodejs npm
 ```
 
-### 2. Set up Virtual Environment
+### 2. Automated Installation (Recommended)
+You can use the provided helper script to install all dependencies and optionally create a virtual environment (`yolovenv`).
+
+```bash
+cd webui
+./install.sh
+```
+Follow the on-screen prompts.
+
+### 3. Manual Installation
+If you prefer to install dependencies manually:
+
+#### A. Set up Virtual Environment
 It is **highly recommended** to use a python virtual environment to manage dependencies and avoid conflicts.
 
 ```bash
@@ -25,7 +37,7 @@ python3 -m venv venv
 source venv/bin/activate
 ```
 
-### 3. Install Backend Dependencies
+#### B. Install Backend Dependencies
 With your virtual environment activated, install the required Python packages.
 
 ```bash
@@ -33,7 +45,7 @@ cd webui/backend
 pip install -r requirements.txt
 ```
 
-### 4. Install Frontend Dependencies
+#### C. Install Frontend Dependencies
 Install the Node.js packages for the React frontend.
 
 ```bash
@@ -41,7 +53,7 @@ cd webui/frontend
 npm install
 ```
 
-### 5. Run the Application
+### 4. Run the Application
 
 You can run the backend and frontend separately, or use the helper script.
 
@@ -70,7 +82,7 @@ npm run dev
 ```
 Then access the UI at `http://localhost:3000`.
 
-### 6. Remote Access
+### 5. Remote Access
 To access the WebUI from a different machine (e.g., accessing a remote server from your local laptop), you can use SSH port forwarding.
 
 ```bash
