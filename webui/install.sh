@@ -38,9 +38,12 @@ echo "-------------------------------------------"
 echo "  Installing Frontend Dependencies..."
 echo "-------------------------------------------"
 cd frontend || exit
+echo "Cleaning up previous install artifacts..."
+rm -rf node_modules package-lock.json
+npm cache clean --force
 npm config set progress=false
 echo "Installing Frontend Dependencies (Verbose mode)..."
-npm install --verbose --no-audit --no-fund
+npm install --verbose --no-audit --no-fund --no-optional
 cd ..
 
 # 4. Completion Instructions
