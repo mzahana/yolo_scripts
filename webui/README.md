@@ -158,6 +158,13 @@ Expand your dataset using synthetic generation.
 *   **Preview**: Visualize augmentations (Rotation, Blur, Color Jitter, Scaling) in real-time.
 *   **Generate**: Create a new augmented dataset with multiplied samples.
 
+### 9. 💻 Web Terminal
+Manage your environment directly from the browser.
+*   **Integrated Shell**: Full-featured terminal emulator using `xterm.js`.
+*   **Real-time Interaction**: Execute system commands, run scripts, and manage processes via WebSockets.
+*   **Auto-Resize**: Terminal responsive to window size changes.
+*   **Direct Connection**: Connects directly to the backend process for low-latency interaction.
+
 ---
 
 ## 🔧 Troubleshooting

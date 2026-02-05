@@ -17,6 +17,7 @@ import StatsView from './components/StatsView';
 import DatasetSampling from './components/DatasetSampling';
 import TrainingView from './components/TrainingView';
 import DatasetToolsPage from './pages/DatasetToolsPage';
+import WebTerminal from './components/Terminal';
 
 const API_BASE = '/api';
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
@@ -88,6 +89,8 @@ function App() {
         { id: 'stats', label: 'Statistics', icon: '📊' },
         { type: 'header', label: 'TRAINING' },
         { id: 'training', label: 'Train Model', icon: '🏋️' },
+        { type: 'header', label: 'SYSTEM' },
+        { id: 'terminal', label: 'Terminal', icon: '💻' },
     ]);
     const [newDatasetName, setNewDatasetName] = useState('dataset_v1');
     const [datasetStrategy, setDatasetStrategy] = useState('all');
@@ -1378,7 +1381,7 @@ function App() {
                         }
 
                         // Allow Data Inspection even without a project
-                        const isVisible = projectConfig || isStandalone || item.id === 'verification';
+                        const isVisible = projectConfig || isStandalone || item.id === 'verification' || item.id === 'terminal';
                         if (!isVisible) return null;
 
                         return (
@@ -1393,7 +1396,7 @@ function App() {
                                         setActiveTab('stats');
                                     } else {
                                         // If clicking Data Inspection or Manual Annotation on a fresh start, enter standalone mode
-                                        if ((item.id === 'verification' || item.id === 'annotation') && !projectConfig) {
+                                        if ((item.id === 'verification' || item.id === 'annotation' || item.id === 'terminal') && !projectConfig) {
                                             setIsStandalone(true);
                                         }
                                         setActiveTab(item.id);
@@ -1629,6 +1632,12 @@ function App() {
                                     </div>
                                 )}
                             </div>
+                        </div>
+                    )}
+
+                    {activeTab === 'terminal' && (
+                        <div style={{ height: 'calc(100vh - 100px)', paddingBottom: '20px' }}>
+                            <WebTerminal />
                         </div>
                     )}
 

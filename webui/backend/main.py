@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks, WebSocket, WebSocketDisconnect
+import logging
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -12,13 +13,14 @@ import sys
 import threading
 import shutil
 import json
+import asyncio
 from datetime import datetime
 from project_manager import ProjectManager
 from training_manager import training_manager
 from export_manager import export_manager
-from export_manager import export_manager
 from dataset_tools_manager import DatasetToolsManager
 from data_augmentation_manager import DataAugmentationManager
+from terminal_manager import terminal_manager
 from fastapi.responses import StreamingResponse
 import io
 import torch
@@ -36,6 +38,9 @@ except ImportError as e:
     print(f"Error importing scripts/ultralytics: {e}")
 
 app = FastAPI()
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app.add_middleware(
     CORSMiddleware,
@@ -801,7 +806,71 @@ def get_augmentation_stats(path: str):
     try:
         return DataAugmentationManager.get_dataset_stats(path)
     except Exception as e:
-         raise HTTPException(status_code=500, detail=str(e))
+        print(f"Error fetching stats: {e}")
+        return {"total_objects": 0, "class_counts": {}, "class_percentages": {}}
+
+@app.websocket("/api/ws/terminal")
+async def websocket_terminal(websocket: WebSocket):
+    print("[TERMINAL_DEBUG] WS: Connection request received", flush=True)
+    try:
+        await websocket.accept()
+        print("[TERMINAL_DEBUG] WS: Connection accepted", flush=True)
+    except Exception as e:
+        print(f"[TERMINAL_DEBUG] WS: Error accepting connection: {e}", flush=True)
+        return
+    
+    try:
+        session_id = str(id(websocket))
+        print(f"[TERMINAL_DEBUG] WS: Starting session {session_id}", flush=True)
+        master_fd, pid = terminal_manager.start_session(session_id)
+        print(f"[TERMINAL_DEBUG] WS: Session started, master_fd={master_fd}, pid={pid}", flush=True)
+    except Exception as e:
+        print(f"[TERMINAL_DEBUG] WS: Error starting session: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        await websocket.close()
+        return
+
+    # Create a loop to read from pty and send to websocket
+    async def read_from_pty():
+        print(f"[TERMINAL_DEBUG] WS: Reader task started for {session_id}", flush=True)
+        try:
+            while True:
+                data = await asyncio.to_thread(terminal_manager.read_output, session_id)
+                if data:
+                    try:
+                        await websocket.send_text(data.decode(errors='replace'))
+                    except Exception as e:
+                        print(f"[TERMINAL_DEBUG] WS: Error sending text: {e}", flush=True)
+                        break
+                else:
+                    await asyncio.sleep(0.01)
+        except Exception as e:
+            print(f"[TERMINAL_DEBUG] WS: Error reading from pty: {e}", flush=True)
+        print(f"[TERMINAL_DEBUG] WS: Reader task ended for {session_id}", flush=True)
+
+    read_task = asyncio.create_task(read_from_pty())
+    
+    try:
+        while True:
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            
+            if message['type'] == 'input':
+                terminal_manager.write_input(session_id, message['data'])
+            elif message['type'] == 'resize':
+                terminal_manager.resize_terminal(session_id, message['cols'], message['rows'])
+                
+    except WebSocketDisconnect:
+        print("[TERMINAL_DEBUG] WS: Terminal WebSocket disconnected", flush=True)
+    except Exception as e:
+        print(f"[TERMINAL_DEBUG] WS: Terminal WebSocket error: {e}", flush=True)
+    finally:
+        print(f"[TERMINAL_DEBUG] WS: Cleaning up session {session_id}", flush=True)
+        read_task.cancel()
+        terminal_manager.close_session(session_id)
+
+
 
 @app.post("/api/augmentation/sample")
 def sample_augmentation_object(request: AugmentationSampleRequest):

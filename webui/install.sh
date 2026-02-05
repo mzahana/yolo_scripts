@@ -47,6 +47,8 @@ npm config set fetch-retry-mintimeout 20000
 npm config set fetch-retry-maxtimeout 120000
 echo "Installing Frontend Dependencies (Verbose mode)..."
 npm install --verbose --no-audit --no-fund
+# Ensure xterm and addons are installed
+npm install xterm xterm-addon-fit xterm-addon-web-links
 cd ..
 
 # 4. Completion Instructions
