@@ -1,236 +1,115 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Terminal } from 'xterm';
-import { FitAddon } from 'xterm-addon-fit';
-import 'xterm/css/xterm.css';
+import React, { useState } from 'react';
+import TerminalInstance from './TerminalInstance';
 
 const WebTerminal = () => {
-    const terminalContainerRef = useRef(null);
-    const wsRef = useRef(null);
-    const xtermRef = useRef(null);
-    const fitAddonRef = useRef(null);
-    const [status, setStatus] = useState('disconnected');
-    const [logs, setLogs] = useState([]);
+    const [terminals, setTerminals] = useState([{ id: 1, name: 'Terminal 1' }]);
+    const [activeTerminalId, setActiveTerminalId] = useState(1);
+    const [nextId, setNextId] = useState(2);
 
-    const addLog = (msg) => {
-        const time = new Date().toISOString().split('T')[1].split('.')[0];
-        setLogs(prev => [`[${time}] ${msg}`, ...prev].slice(0, 50));
-        console.log(`[Terminal] ${msg}`);
+    const addTerminal = () => {
+        const newId = nextId;
+        setTerminals([...terminals, { id: newId, name: `Terminal ${newId}` }]);
+        setActiveTerminalId(newId);
+        setNextId(nextId + 1);
     };
 
-    const connect = () => {
-        if (wsRef.current) {
-            addLog("Closing existing WS before new connection");
-            wsRef.current.close();
-        }
+    const closeTerminal = (e, id) => {
+        e.stopPropagation(); // Prevent tab switching when closing
+        const newTerminals = terminals.filter(t => t.id !== id);
 
-        setStatus('connecting');
-        addLog("Starting connection process...");
-
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        // Connect directly to backend port 8000 to avoid proxy issues
-        const hostname = window.location.hostname;
-        const wsUrl = `${protocol}//${hostname}:8000/api/ws/terminal`;
-
-        addLog(`Connecting to: ${wsUrl}`);
-
-        try {
-            const ws = new WebSocket(wsUrl);
-            wsRef.current = ws;
-
-            ws.onopen = () => {
-                if (wsRef.current !== ws) {
-                    addLog("Ignoring stale WS open event");
-                    return;
-                }
-                addLog("WebSocket Open");
-                setStatus('connected');
-
-                if (xtermRef.current) {
-                    xtermRef.current.write('\r\n\x1b[32mTarget Connected\x1b[0m\r\n\r\n');
-                }
-
-                // Initial resize
-                if (fitAddonRef.current) {
-                    try {
-                        const dims = fitAddonRef.current.proposeDimensions();
-                        if (dims) {
-                            addLog(`Sending resize: ${dims.cols}x${dims.rows}`);
-                            ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
-                        }
-                    } catch (e) {
-                        addLog(`Error proposing dimensions: ${e.message}`);
-                    }
-                }
-            };
-
-            ws.onmessage = (event) => {
-                if (wsRef.current !== ws) return;
-                if (xtermRef.current) {
-                    xtermRef.current.write(event.data);
-                }
-            };
-
-            ws.onclose = (event) => {
-                if (wsRef.current !== ws) return;
-                addLog(`WebSocket Closed: Code=${event.code}, Reason=${event.reason || 'None'}`);
-                setStatus('disconnected');
-            };
-
-            ws.onerror = (error) => {
-                if (wsRef.current !== ws) return;
-                addLog("WebSocket Error occurred");
-                setStatus('error');
-            };
-
-        } catch (e) {
-            addLog(`Exception creating WebSocket: ${e.message}`);
-            setStatus('error');
-        }
-    };
-
-    useEffect(() => {
-        addLog("Component MOUNTED");
-
-        if (!terminalContainerRef.current) {
-            addLog("Container ref is null!");
-            return;
-        }
-
-        // Initialize xterm
-        const term = new Terminal({
-            cursorBlink: true,
-            theme: {
-                background: '#1e1e1e',
-                foreground: '#ffffff',
-            },
-            fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-            fontSize: 14,
-        });
-
-        const fitAddon = new FitAddon();
-        term.loadAddon(fitAddon);
-
-        try {
-            term.open(terminalContainerRef.current);
-            fitAddon.fit();
-            xtermRef.current = term;
-            fitAddonRef.current = fitAddon;
-            addLog("xterm initialized");
-        } catch (e) {
-            addLog(`Error initializing xterm: ${e.message}`);
-        }
-
-        // Connect after a short delay to allow layout to settle
-        setTimeout(connect, 100);
-
-        // Input handler
-        const handleData = (data) => {
-            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                wsRef.current.send(JSON.stringify({ type: 'input', data: data }));
+        if (newTerminals.length === 0) {
+            // Keep at least one terminal or handle empty state.
+            // Let's reset to a single new terminal.
+            setTerminals([{ id: nextId, name: `Terminal ${nextId}` }]);
+            setActiveTerminalId(nextId);
+            setNextId(nextId + 1);
+        } else {
+            setTerminals(newTerminals);
+            // If we closed the active one, switch to the last one
+            if (activeTerminalId === id) {
+                setActiveTerminalId(newTerminals[newTerminals.length - 1].id);
             }
-        };
-        const disposable = term.onData(handleData);
-
-        // Resize handler
-        const handleResize = () => {
-            if (fitAddonRef.current) {
-                try {
-                    fitAddonRef.current.fit();
-                    const dims = fitAddonRef.current.proposeDimensions();
-                    if (dims && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                        wsRef.current.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
-                    }
-                } catch (e) {
-                    // console.error(e);
-                }
-            }
-        };
-
-        window.addEventListener('resize', handleResize);
-
-        return () => {
-            addLog("Component UNMOUNTING");
-            window.removeEventListener('resize', handleResize);
-            disposable.dispose();
-
-            if (wsRef.current) {
-                wsRef.current.close(1000, "Unmounting");
-                wsRef.current = null;
-            }
-            if (xtermRef.current) {
-                xtermRef.current.dispose();
-                xtermRef.current = null;
-            }
-        };
-    }, []);
-
-    const handleReconnect = () => {
-        if (xtermRef.current) {
-            xtermRef.current.reset();
         }
-        connect();
     };
 
     return (
         <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {/* Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#ccc' }}>
-                <div style={{ fontWeight: 'bold' }}>Terminal</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                        <div style={{
-                            width: '10px', height: '10px', borderRadius: '50%',
-                            backgroundColor: status === 'connected' ? '#10b981' : (status === 'connecting' ? '#f59e0b' : '#ef4444')
-                        }}></div>
-                        <span style={{ fontSize: '0.9rem' }}>{status}</span>
-                    </div>
-                    {status !== 'connected' && (
-                        <button
-                            onClick={handleReconnect}
+            {/* Tabs Header */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', borderBottom: '1px solid #333', paddingBottom: '5px', alignItems: 'center' }}>
+                {terminals.map(term => (
+                    <div
+                        key={term.id}
+                        onClick={() => setActiveTerminalId(term.id)}
+                        style={{
+                            padding: '6px 15px',
+                            background: activeTerminalId === term.id ? '#374151' : 'rgba(255,255,255,0.05)',
+                            color: activeTerminalId === term.id ? 'white' : '#aaa',
+                            borderRadius: '6px 6px 0 0',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            border: '1px solid transparent',
+                            borderColor: activeTerminalId === term.id ? '#4b5563' : 'transparent',
+                            borderBottom: 'none',
+                            userSelect: 'none'
+                        }}
+                    >
+                        <span>{term.name}</span>
+                        <span
+                            onClick={(e) => closeTerminal(e, term.id)}
                             style={{
-                                padding: '4px 12px',
-                                background: '#374151',
-                                border: 'none',
-                                borderRadius: '4px',
-                                color: 'white',
-                                cursor: 'pointer'
+                                opacity: 0.5,
+                                cursor: 'pointer',
+                                fontSize: '0.8rem',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: '16px', height: '16px',
+                                borderRadius: '50%'
                             }}
+                            onMouseEnter={e => e.currentTarget.style.backgroundColor = '#555'}
+                            onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
                         >
-                            Reconnect
-                        </button>
-                    )}
-                </div>
+                            ✕
+                        </span>
+                    </div>
+                ))}
+
+                <button
+                    onClick={addTerminal}
+                    style={{
+                        background: 'transparent',
+                        border: '1px solid #444',
+                        color: '#aaa',
+                        width: '30px',
+                        height: '30px',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '1.2rem',
+                        marginLeft: '5px'
+                    }}
+                    title="New Terminal"
+                >
+                    +
+                </button>
             </div>
 
-            {/* Terminal View */}
-            <div
-                ref={terminalContainerRef}
-                className="terminal-container"
-                style={{
-                    flex: 1,
-                    minHeight: '400px',
-                    background: '#1e1e1e',
-                    borderRadius: '8px',
-                    padding: '10px',
-                    overflow: 'hidden'
-                }}
-            />
-
-            {/* Debug Logs */}
-            <div style={{
-                height: '150px',
-                overflowY: 'auto',
-                background: '#111',
-                color: '#22c55e',
-                fontFamily: 'monospace',
-                fontSize: '0.8rem',
-                padding: '10px',
-                borderRadius: '8px',
-                border: '1px solid #333'
-            }}>
-                <div style={{ color: '#888', marginBottom: '5px', fontWeight: 'bold' }}>Debug Logs (Latest First):</div>
-                {logs.map((log, i) => (
-                    <div key={i}>{log}</div>
+            {/* Terminal Instances Area */}
+            <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+                {terminals.map(term => (
+                    <div
+                        key={term.id}
+                        style={{
+                            height: '100%',
+                            display: activeTerminalId === term.id ? 'block' : 'none'
+                        }}
+                    >
+                        <TerminalInstance visible={activeTerminalId === term.id} />
+                    </div>
                 ))}
             </div>
         </div>

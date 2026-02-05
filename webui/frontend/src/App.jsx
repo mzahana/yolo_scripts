@@ -90,7 +90,6 @@ function App() {
         { type: 'header', label: 'TRAINING' },
         { id: 'training', label: 'Train Model', icon: '🏋️' },
         { type: 'header', label: 'SYSTEM' },
-        { id: 'terminal', label: 'Terminal', icon: '💻' },
     ]);
     const [newDatasetName, setNewDatasetName] = useState('dataset_v1');
     const [datasetStrategy, setDatasetStrategy] = useState('all');
@@ -1382,7 +1381,7 @@ function App() {
 
                         // Allow Data Inspection even without a project
                         const isVisible = projectConfig || isStandalone || item.id === 'verification' || item.id === 'terminal';
-                        if (!isVisible) return null;
+                        if (!isVisible && item.id !== 'terminal') return null;
 
                         return (
                             <div
@@ -1412,6 +1411,19 @@ function App() {
                             </div>
                         );
                     })}
+
+                    {/* Explicitly render Terminal to prevent visibility issues */}
+                    <div
+                        className={`nav-item ${activeTab === 'terminal' ? 'active' : ''}`}
+                        onClick={() => {
+                            console.log('Terminal tab clicked');
+                            if (!projectConfig) setIsStandalone(true);
+                            setActiveTab('terminal');
+                        }}
+                    >
+                        <span className="nav-icon">💻</span>
+                        <span>Terminal</span>
+                    </div>
                 </nav>
 
                 <div style={{ marginTop: 'auto', padding: '20px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', fontSize: '0.8rem' }}>
