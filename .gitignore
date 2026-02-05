@@ -1,1 +1,89 @@
-.vscode
+# System
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+.project
+.classpath
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.manifest
+spec/
+build/
+dist/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Virtual Environments
+venv/
+.venv/
+env/
+yolovenv/
+
+# Node/Frontend
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Logs
+*.log
+webui/backend/logs/
+
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# YOLO / Ultralytics specific
+runs/
+yolov5_runs/
+
+# Large Model Files (Unless intentional)
+*.pt
+*.onnx
+*.tflite
+*.engine
+*.mlmodel
+
+# Project Datasets & Images
+# Raw images
+*_raw_images/
+*_raw_data/
+raw_images/
+
+# Processed images
+*_processed_images/
+*_processed/
+processed_images/
+
+# Labels / Annotations (Optional: Comment out if you WANT to version control labels)
+# Typically dataset versions are ignored if large, but 'annotations' folder might be kept if small.
+# Based on project structure, keeping central 'annotations/' might be desired, 
+# but generated datasets should be ignored.
+*_datasets/
+datasets/
+
+# Masked/Verification images
+*_masked_images/
+*_masked/
+masked_images/
+
+# Filtered images
+*_filtered/
+*_filtered_images/
+
+# Empty images extraction
+*_empty/
+*_empty_images/
+
+# Temporary / Scratch
+tmp/
+temp/
