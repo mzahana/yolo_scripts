@@ -42,8 +42,11 @@ echo "Cleaning up previous install artifacts..."
 rm -rf node_modules package-lock.json
 npm cache clean --force
 npm config set progress=false
+npm config set fetch-retries 5
+npm config set fetch-retry-mintimeout 20000
+npm config set fetch-retry-maxtimeout 120000
 echo "Installing Frontend Dependencies (Verbose mode)..."
-npm install --verbose --no-audit --no-fund --no-optional
+npm install --verbose --no-audit --no-fund
 cd ..
 
 # 4. Completion Instructions
