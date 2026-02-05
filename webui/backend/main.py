@@ -188,6 +188,7 @@ class AugmentationPreviewRequest(BaseModel):
     scaling_range: Optional[List[float]] = None
     scaling_range: Optional[List[float]] = None
     contrast_range: Optional[List[float]] = None
+    brightness_range: Optional[List[int]] = None
     region_scale: float = 0.8
     roi: Optional[List[float]] = None # [x, y, w, h] normalized
     
@@ -771,6 +772,7 @@ def preview_augmentation(request: AugmentationPreviewRequest):
             request.blur_range,
             request.scaling_range,
             request.contrast_range,
+            request.brightness_range,
             request.region_scale,
             request.roi
         )
@@ -790,6 +792,7 @@ class AugmentationApplyPreviewRequest(BaseModel):
     blur_range: Optional[List[int]] = None # Kernel size
     scaling_range: Optional[List[float]] = None
     contrast_range: Optional[List[float]] = None
+    brightness_range: Optional[List[int]] = None
     region_scale: float = 0.8
     roi: Optional[List[float]] = None
 
@@ -820,6 +823,7 @@ def apply_augmentation_preview(request: AugmentationApplyPreviewRequest):
             request.blur_range,
             request.scaling_range,
             request.contrast_range,
+            request.brightness_range,
             request.region_scale,
             request.roi
         )
@@ -865,6 +869,7 @@ def generate_augmentation(req: AugmentationGenerateRequest, background_tasks: Ba
             blur_range=req.blur_range,
             scaling_range=req.scaling_range,
             contrast_range=req.contrast_range,
+            brightness_range=req.brightness_range,
             region_scale=req.region_scale,
             augment_together=req.augment_together,
             progress_tracker=app.state.task_progress,

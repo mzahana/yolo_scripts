@@ -72,7 +72,7 @@ class DataAugmentor:
         return np.array(transformed_coords)
 
     @staticmethod
-    def apply_augmentations(obj_roi, mask_roi, w, h, rotation_range, blur_range, scaling_range, contrast_range, max_region_w, max_region_h):
+    def apply_augmentations(obj_roi, mask_roi, w, h, rotation_range, blur_range, scaling_range, contrast_range, brightness_range, max_region_w, max_region_h):
         """Apply augmentations to an object and return the augmented object, mask, new dimensions, and transformation parameters"""
         aug_obj = obj_roi.copy()
         aug_mask = mask_roi.copy()
@@ -86,9 +86,25 @@ class DataAugmentor:
         # Rotation
         if rotation_range:
             angle = random.uniform(*rotation_range)
+            # Calculate new bounding box dimensions to avoid clipping
+            angle_rad = np.deg2rad(angle)
+            sin_a = np.abs(np.sin(angle_rad))
+            cos_a = np.abs(np.cos(angle_rad))
+            
+            new_w_rot = int((h * sin_a) + (w * cos_a))
+            new_h_rot = int((h * cos_a) + (w * sin_a))
+            
             rotation_matrix = cv2.getRotationMatrix2D((w // 2, h // 2), angle, 1.0)
-            aug_obj = cv2.warpAffine(aug_obj, rotation_matrix, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
-            aug_mask = cv2.warpAffine(aug_mask, rotation_matrix, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+            
+            # Adjust translation to center the rotated image in the new bounding box
+            rotation_matrix[0, 2] += (new_w_rot / 2) - (w // 2)
+            rotation_matrix[1, 2] += (new_h_rot / 2) - (h // 2)
+            
+            aug_obj = cv2.warpAffine(aug_obj, rotation_matrix, (new_w_rot, new_h_rot), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+            aug_mask = cv2.warpAffine(aug_mask, rotation_matrix, (new_w_rot, new_h_rot), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+            
+            # Update dimensions for subsequent steps
+            w, h = new_w_rot, new_h_rot
 
         # Blurring
         if blur_range:
@@ -118,6 +134,15 @@ class DataAugmentor:
         if contrast_range:
             alpha = random.uniform(*contrast_range)
             aug_obj = cv2.convertScaleAbs(aug_obj, alpha=alpha, beta=0)
+
+        # Brightness Adjustment
+        if brightness_range:
+             beta = random.randint(*brightness_range)
+             # Use current alpha (which is 1.0 if contrast wasn't applied, or whatever it is)
+             # Actually convertScaleAbs resets if we call it again.
+             # We should probably combine them or just apply sequentially.
+             # calling convertScaleAbs(src, alpha=1, beta=beta) adds beta.
+             aug_obj = cv2.convertScaleAbs(aug_obj, alpha=1, beta=beta)
 
         # Ensure the object fits within the defined region scale
         if max_region_w > 0 and max_region_h > 0:
@@ -217,6 +242,7 @@ class DataAugmentor:
         blur_range=None,
         scaling_range=None,
         contrast_range=None,
+        brightness_range=None,
         region_scale=0.8,
         roi=None
     ):
@@ -256,7 +282,7 @@ class DataAugmentor:
         # Augment
         aug_obj, aug_mask, new_w, new_h, rotation_matrix, scale_factor = DataAugmentor.apply_augmentations(
             obj_roi, mask_roi, w, h, rotation_range, blur_range, 
-            scaling_range, contrast_range, max_region_w, max_region_h
+            scaling_range, contrast_range, brightness_range, max_region_w, max_region_h
         )
         
         if aug_obj is None:
@@ -306,7 +332,7 @@ class DataAugmentor:
     @staticmethod
     def process_label_file(
         label_file, images_dir, labels_dir, background_img, output_dir, class_ids, 
-        num_augmentations, rotation_range, blur_range, scaling_range, contrast_range, 
+        num_augmentations, rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
         region_scale, image_w, image_h, max_region_w, max_region_h, augment_together
     ):
         label_path = os.path.join(labels_dir, label_file)
@@ -360,7 +386,7 @@ class DataAugmentor:
 
                     aug_obj, aug_mask, new_w, new_h, rotation_matrix, scale_factor = DataAugmentor.apply_augmentations(
                         obj_roi, mask_roi, w, h, rotation_range, blur_range, 
-                        scaling_range, contrast_range, max_region_w, max_region_h
+                        scaling_range, contrast_range, brightness_range, max_region_w, max_region_h
                     )
                     if aug_obj is None: continue
 
@@ -398,7 +424,7 @@ class DataAugmentor:
                 for i in range(num_augmentations):
                     aug_obj, aug_mask, new_w, new_h, rotation_matrix, scale_factor = DataAugmentor.apply_augmentations(
                         obj_roi, mask_roi, w, h, rotation_range, blur_range, 
-                        scaling_range, contrast_range, max_region_w, max_region_h
+                        scaling_range, contrast_range, brightness_range, max_region_w, max_region_h
                     )
                     if aug_obj is None: continue
 
@@ -434,7 +460,7 @@ class DataAugmentor:
     def run_composition_mode(
         images_dir, labels_dir, class_ids, background_img, output_dir,
         total_images, objects_per_image, 
-        rotation_range, blur_range, scaling_range, contrast_range, 
+        rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
         region_scale, image_w, image_h, max_region_w, max_region_h,
         update_progress_callback=None, roi=None
     ):
@@ -512,7 +538,7 @@ class DataAugmentor:
                     # Augment
                     aug_obj, aug_mask, new_w, new_h, rotation_matrix, scale_factor = DataAugmentor.apply_augmentations(
                         obj_roi, mask_roi, w, h, rotation_range, blur_range, 
-                        scaling_range, contrast_range, max_region_w, max_region_h
+                        scaling_range, contrast_range, brightness_range, max_region_w, max_region_h
                     )
                     if aug_obj is None:
                         retries += 1
@@ -621,7 +647,7 @@ class DataAugmentor:
     def run(
         image_dir, class_ids, background_img_path, output_dir=None, 
         num_augmentations=3, rotation_range=None, blur_range=None, 
-        scaling_range=None, contrast_range=None, region_scale=0.8, 
+        scaling_range=None, contrast_range=None, brightness_range=None, region_scale=0.8, 
         augment_together=False, progress_callback: Optional[Callable[[int, int], None]] = None,
         roi=None,
         composition_mode=False, total_images=10, objects_per_image=3
@@ -693,7 +719,7 @@ class DataAugmentor:
              return DataAugmentor.run_composition_mode(
                  images_dir, labels_dir, class_ids, background_img, output_dir,
                  total_images, objects_per_image,
-                 rotation_range, blur_range, scaling_range, contrast_range,
+                 rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
                  region_scale, image_w, image_h, max_region_w, max_region_h,
                  progress_callback, roi
              )
@@ -738,7 +764,7 @@ class DataAugmentor:
                 executor.submit(
                     DataAugmentor.process_file_wrapper, 
                     (label_file, images_dir, labels_dir, background_img, output_dir, class_ids,
-                    num_augmentations, rotation_range, blur_range, scaling_range, contrast_range, region_scale,
+                    num_augmentations, rotation_range, blur_range, scaling_range, contrast_range, brightness_range, region_scale,
                     image_w, image_h, max_region_w, max_region_h, augment_together)
                 ) for label_file in valid_label_files
             ]
@@ -792,6 +818,7 @@ if __name__ == "__main__":
     parser.add_argument('--blur_range', type=int, nargs=2)
     parser.add_argument('--scaling_range', type=float, nargs=2)
     parser.add_argument('--contrast_range', type=float, nargs=2)
+    parser.add_argument('--brightness_range', type=int, nargs=2)
     parser.add_argument('--region_scale', type=float, default=0.8)
     parser.add_argument('--augment_together', action='store_true')
 
@@ -805,7 +832,7 @@ if __name__ == "__main__":
     count = DataAugmentor.run(
         args.image_dir, args.class_ids, args.background_img_path, args.output_dir,
         args.num_augmentations, args.rotation_range, args.blur_range,
-        args.scaling_range, args.contrast_range, args.region_scale, 
+        args.scaling_range, args.contrast_range, args.brightness_range, args.region_scale, 
         args.augment_together
     )
     print(f"Done. Generated {count} objects.")

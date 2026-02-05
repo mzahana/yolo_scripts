@@ -9,6 +9,7 @@ const AUGMENTATION_TYPES = [
     { id: 'blur', label: 'Blur', icon: '💧', desc: 'Apply Gaussian blur' },
     { id: 'scaling', label: 'Random Scaling', icon: '📏', desc: 'Randomly scale objects' },
     { id: 'contrast', label: 'Contrast', icon: '🌗', desc: 'Adjust brightness/contrast' },
+    { id: 'brightness', label: 'Brightness', icon: '🔆', desc: 'Adjust brightness offset' },
 ];
 
 const DataAugmentationTool = ({
@@ -165,7 +166,8 @@ const DataAugmentationTool = ({
                 rotation_range: params.rotation_range || null,
                 blur_range: params.blur_range || null,
                 scaling_range: params.scaling_range || null,
-                contrast_range: params.contrast_range || null
+                contrast_range: params.contrast_range || null,
+                brightness_range: params.brightness_range || null
             };
 
             const res = await axios.post("/api/augmentation/apply_preview", payload);
@@ -199,12 +201,12 @@ const DataAugmentationTool = ({
         if (type === 'blur') defaults = { blur_range: [0, 3] };
         if (type === 'scaling') defaults = { scaling_range: [0.8, 1.2] };
         if (type === 'contrast') defaults = { contrast_range: [0.8, 1.2] };
+        if (type === 'brightness') defaults = { brightness_range: [-30, 30] };
 
         setEditingType(type);
         setCurrentParams(defaults);
         setIsEditing(true);
 
-        setIsEditing(true);
         setIsDropdownOpen(false); // Close dropdown
 
         // Auto-draw sample if missing
@@ -714,6 +716,7 @@ const DataAugmentationTool = ({
                             {editingType === 'scaling' && renderRangeSlider('Scale Factor', 'scaling_range', 0.1, 3.0, 0.1, 'x')}
                             {editingType === 'blur' && renderRangeSlider('Kernel Size', 'blur_range', 0, 15, 1, 'px')}
                             {editingType === 'contrast' && renderRangeSlider('Alpha', 'contrast_range', 0.5, 3.0, 0.1)}
+                            {editingType === 'brightness' && renderRangeSlider('Beta', 'brightness_range', -100, 100, 1)}
                         </div>
                     </div>
                 </div>

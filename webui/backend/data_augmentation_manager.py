@@ -140,8 +140,7 @@ class DataAugmentationManager:
         # Call generate with NO augs (default params)
         preview_img = DataAugmentor.generate_single_preview(
             str(image_path), selected_line, bg_img,
-            None, None, None, None, 1.0, None # 1.0 scale to show natural size, or fit region?
-            # Actually, user wants to see it 'placed'. region_scale default is 0.8
+            None, None, None, None, None, 1.0, None
         )
         
         if preview_img is None: raise ValueError("Failed to extract object")
@@ -161,6 +160,7 @@ class DataAugmentationManager:
         blur_range: Optional[List[int]],
         scaling_range: Optional[List[float]],
         contrast_range: Optional[List[float]],
+        brightness_range: Optional[List[int]],
         region_scale: float,
         roi: Optional[List[float]] = None
     ) -> Dict:
@@ -178,7 +178,7 @@ class DataAugmentationManager:
 
         preview_img = DataAugmentor.generate_single_preview(
             sample["image_path"], sample["label_line"], bg_img,
-            rotation_range, blur_range, scaling_range, contrast_range, region_scale, roi_tuple
+            rotation_range, blur_range, scaling_range, contrast_range, brightness_range, region_scale, roi_tuple
         )
         
         if preview_img is None: raise ValueError("Failed to generate preview")
@@ -204,6 +204,7 @@ class DataAugmentationManager:
         blur_range: Optional[List[int]],
         scaling_range: Optional[List[float]],
         contrast_range: Optional[List[float]],
+        brightness_range: Optional[List[int]],
         region_scale: float,
         augment_together: bool,
         progress_tracker: dict,
@@ -240,6 +241,7 @@ class DataAugmentationManager:
                 blur_range=blur_range,
                 scaling_range=scaling_range,
                 contrast_range=contrast_range,
+                brightness_range=brightness_range,
                 region_scale=region_scale,
                 augment_together=augment_together,
                 progress_callback=update_progress,
