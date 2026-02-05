@@ -38,7 +38,9 @@ echo "-------------------------------------------"
 echo "  Installing Frontend Dependencies..."
 echo "-------------------------------------------"
 cd frontend || exit
-npm install
+npm config set progress=false
+echo "Installing Frontend Dependencies (Verbose mode)..."
+npm install --verbose --no-audit --no-fund
 cd ..
 
 # 4. Completion Instructions
