@@ -5,6 +5,7 @@ import RebalanceSplitsTool from '../components/tools/RebalanceSplitsTool';
 import FlattenDatasetTool from '../components/tools/FlattenDatasetTool';
 import SplitDatasetTool from '../components/tools/SplitDatasetTool';
 import DataAugmentationTool from '../components/tools/DataAugmentationTool';
+import SimpleAugmentationTool from '../components/tools/SimpleAugmentationTool';
 import DatasetSampling from '../components/DatasetSampling';
 
 const DatasetToolsPage = ({
@@ -31,7 +32,8 @@ const DatasetToolsPage = ({
         { id: 'rebalance', label: 'Re-balance Splits', icon: '⚖️', description: 'Re-distribute images between Train/Val/Test.' },
         { id: 'flatten', label: 'Flatten Dataset', icon: '📄', description: 'Convert split dataset to flat structure.' },
         { id: 'split', label: 'Split Dataset', icon: '✂️', description: 'Split a dataset into multiple parts.' },
-        { id: 'augmentation', label: 'Data Augmentation', icon: '🎨', description: 'Augment dataset properties and objects.' },
+        { id: 'augmentation', label: 'Advanced Augmentation', icon: '🎨', description: 'Augment dataset properties and objects (Composition, ROI).' },
+        { id: 'simple_augmentation', label: 'Simple Augmentation', icon: '⚡', description: 'Global dataset augmentation (Flip, Rotate, Blur, etc.).' },
         { id: 'sampling', label: 'Dataset Sampling', icon: '🎲', description: 'Sample a subset of images from a dataset.' },
     ];
 
@@ -159,6 +161,14 @@ const DatasetToolsPage = ({
                         showNotification={showNotification}
                         taskProgress={taskProgress}
                         setIsTaskRunning={setIsTaskRunning}
+                    />
+                )}
+                {activeTool === 'simple_augmentation' && (
+                    <SimpleAugmentationTool
+                        initialDatasetPath={datasetPath}
+                        handleLandingBrowse={handleLandingBrowse}
+                        showNotification={showNotification}
+                        isTaskRunning={isTaskRunning}
                     />
                 )}
                 {activeTool === 'sampling' && (

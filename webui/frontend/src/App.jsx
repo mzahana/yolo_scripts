@@ -1457,6 +1457,53 @@ function App() {
                     cacheBuster={cacheBuster}
                 />
 
+                {activeTab === 'processing' && (
+                    <DatasetToolsPage
+                        mergeSources={mergeSources}
+                        setMergeSources={setMergeSources}
+                        addMergeSource={addMergeSource}
+                        removeMergeSource={removeMergeSource}
+                        mergeOutput={mergeOutput}
+                        setMergeOutput={setMergeOutput}
+                        handleMerge={handleMerge}
+                        extractSource={extractSource}
+                        setExtractSource={setExtractSource}
+                        availableClasses={availableClasses}
+                        selectedClasses={selectedClasses}
+                        handleFetchClasses={handleFetchClasses}
+                        toggleClass={toggleClass}
+                        toggleFilterClass={toggleFilterClass}
+                        extractOutput={extractOutput}
+                        setExtractOutput={setExtractOutput}
+                        handleExtract={handleExtract}
+                        rebalanceInput={rebalanceInput}
+                        setRebalanceInput={setRebalanceInput}
+                        rebalanceStats={rebalanceStats}
+                        newRebalancePcts={newRebalancePcts}
+                        setNewRebalancePcts={setNewRebalancePcts}
+                        deleteOriginalRebalance={deleteOriginalRebalance}
+                        setDeleteOriginalRebalance={setDeleteOriginalRebalance}
+                        handleRebalance={handleRebalance}
+                        fetchRebalanceStats={fetchRebalanceStats}
+                        flattenInput={flattenInput}
+                        setFlattenInput={setFlattenInput}
+                        handleFlatten={handleFlatten}
+                        splitInput={splitInput}
+                        setSplitInput={setSplitInput}
+                        splitCount={splitCount}
+                        setSplitCount={setSplitCount}
+                        handleSplit={handleSplit}
+                        datasetPath={datasetPath}
+                        projectConfig={projectConfig}
+                        handleLandingBrowse={handleLandingBrowse}
+                        isTaskRunning={isTaskRunning}
+                        taskProgress={taskProgress}
+                        openFileBrowser={openFileBrowser}
+                        setIsTaskRunning={setIsTaskRunning}
+                        showNotification={showNotification}
+                    />
+                )}
+
                 <div className="container">
                     {activeTab === 'project_home' && (
                         <section className="glass section-card" style={{ maxWidth: '800px' }}>
@@ -1668,52 +1715,7 @@ function App() {
                         </section>
                     )}
 
-                    {activeTab === 'processing' && (
-                        <DatasetToolsPage
-                            mergeSources={mergeSources}
-                            setMergeSources={setMergeSources}
-                            addMergeSource={addMergeSource}
-                            removeMergeSource={removeMergeSource}
-                            mergeOutput={mergeOutput}
-                            setMergeOutput={setMergeOutput}
-                            handleMerge={handleMerge}
-                            extractSource={extractSource}
-                            setExtractSource={setExtractSource}
-                            availableClasses={availableClasses}
-                            selectedClasses={selectedClasses}
-                            handleFetchClasses={handleFetchClasses}
-                            toggleClass={toggleClass}
-                            toggleFilterClass={toggleFilterClass}
-                            extractOutput={extractOutput}
-                            setExtractOutput={setExtractOutput}
-                            handleExtract={handleExtract}
-                            rebalanceInput={rebalanceInput}
-                            setRebalanceInput={setRebalanceInput}
-                            rebalanceStats={rebalanceStats}
-                            newRebalancePcts={newRebalancePcts}
-                            setNewRebalancePcts={setNewRebalancePcts}
-                            deleteOriginalRebalance={deleteOriginalRebalance}
-                            setDeleteOriginalRebalance={setDeleteOriginalRebalance}
-                            handleRebalance={handleRebalance}
-                            fetchRebalanceStats={fetchRebalanceStats}
-                            flattenInput={flattenInput}
-                            setFlattenInput={setFlattenInput}
-                            handleFlatten={handleFlatten}
-                            splitInput={splitInput}
-                            setSplitInput={setSplitInput}
-                            splitCount={splitCount}
-                            setSplitCount={setSplitCount}
-                            handleSplit={handleSplit}
-                            datasetPath={datasetPath}
-                            projectConfig={projectConfig}
-                            handleLandingBrowse={handleLandingBrowse}
-                            isTaskRunning={isTaskRunning}
-                            taskProgress={taskProgress}
-                            openFileBrowser={openFileBrowser}
-                            setIsTaskRunning={setIsTaskRunning}
-                            showNotification={showNotification}
-                        />
-                    )}
+
 
                     {
                         activeTab === 'preprocess' && (
@@ -1992,12 +1994,10 @@ function App() {
                                         </div>
                                     </div>
                                 )}
-
-
-
                             </section>
                         )
                     }
+
 
                     {
                         activeTab === 'verification' && (

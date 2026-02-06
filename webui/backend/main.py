@@ -21,6 +21,7 @@ from export_manager import export_manager
 from dataset_tools_manager import DatasetToolsManager
 from data_augmentation_manager import DataAugmentationManager
 from terminal_manager import terminal_manager
+from simple_augmentation_manager import SimpleAugmentationManager
 from fastapi.responses import StreamingResponse
 import io
 import torch
@@ -206,7 +207,22 @@ class AugmentationGenerateRequest(AugmentationPreviewRequest):
     composition_mode: bool = False
     total_images: int = 10
     objects_per_image: int = 3
+    objects_per_image: int = 3
     custom_output_name: Optional[str] = None
+
+class SimpleAugmentationPreviewRequest(BaseModel):
+    dataset_path: str
+    config: Dict
+
+class SimpleAugmentationScanRequest(BaseModel):
+    dataset_path: str
+
+class SimpleAugmentationRunRequest(BaseModel):
+    dataset_path: str
+    output_name: str
+    multiplier: int
+    config: Dict
+    selected_splits: Optional[List[str]] = None
 
 def find_project_root(path: Path) -> Path:
     """Heuristic to find the 'main' project directory by traversing up from known subfolders."""
@@ -784,6 +800,40 @@ def preview_augmentation(request: AugmentationPreviewRequest):
     except Exception as e:
         import traceback
         traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/augment/simple/preview")
+def simple_augment_preview(request: SimpleAugmentationPreviewRequest):
+    try:
+        return SimpleAugmentationManager.generate_preview(request.dataset_path, request.config)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/augment/simple/run")
+def simple_augment_run(request: SimpleAugmentationRunRequest, background_tasks: BackgroundTasks):
+    if app.state.task_progress["status"] == "running":
+         raise HTTPException(status_code=400, detail="A background task is already running")
+         
+    try:
+        app.state.task_progress = {
+            "status": "idle",
+            "current": 0,
+            "total": 0,
+            "message": "Starting...",
+            "result": None
+        }
+        background_tasks.add_task(
+            SimpleAugmentationManager.run_augmentation_job,
+            request.dataset_path,
+            request.output_name,
+            request.multiplier,
+            request.config,
+            app.state.task_progress
+        )
+        return {"status": "started"}
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 class AugmentationSampleRequest(BaseModel):
@@ -3249,6 +3299,50 @@ class ExportConfig(BaseModel):
     nms: bool = False
     data: Optional[str] = None # Required for INT8 calibration
     overrides: Optional[Dict[str, Any]] = None
+
+@app.post("/api/augment/simple/scan")
+def simple_augmentation_scan(request: SimpleAugmentationScanRequest):
+    try:
+        if not os.path.exists(request.dataset_path):
+             raise HTTPException(status_code=400, detail="Dataset path not found")
+        
+        return SimpleAugmentationManager.scan_dataset(request.dataset_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/augment/simple/preview")
+def simple_augmentation_preview(request: SimpleAugmentationPreviewRequest):
+    try:
+        return SimpleAugmentationManager.generate_preview(request.dataset_path, request.config)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/augment/simple/run")
+def simple_augmentation_run(request: SimpleAugmentationRunRequest, background_tasks: BackgroundTasks):
+    try:
+        if app.state.task_progress["status"] != "idle" and app.state.task_progress["status"] != "error":
+             raise HTTPException(status_code=400, detail="A task is already running")
+             
+        app.state.task_progress["status"] = "starting"
+        app.state.task_progress["current"] = 0
+        app.state.task_progress["total"] = 0
+        app.state.task_progress["message"] = "Starting..."
+        app.state.task_progress["result"] = None
+        
+        background_tasks.add_task(
+            SimpleAugmentationManager.run_augmentation_job,
+            request.dataset_path,
+            request.output_name,
+            request.multiplier,
+            request.config,
+            app.state.task_progress,
+            request.selected_splits
+        )
+        
+        return {"status": "started", "output_path": request.output_name}
+    except Exception as e:
+        app.state.task_progress["status"] = "error"
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/training/models")
 def get_training_models():
