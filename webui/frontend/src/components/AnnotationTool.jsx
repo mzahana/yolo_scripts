@@ -139,7 +139,7 @@ const AnnotationTool = ({ datasetPath, selectedSplit, onPathChange, samModelPath
             }
         };
         loadData();
-    }, [currentIndex, images, datasetPath]);
+    }, [currentIndex, images, datasetPath, jumpInProgress]);
 
     // Keyboard Navigation
     useEffect(() => {

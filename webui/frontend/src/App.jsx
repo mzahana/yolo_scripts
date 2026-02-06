@@ -662,15 +662,12 @@ function App() {
         }
     };
 
-    const jumpToAnnotation = (imageName) => {
-        // Fix: Don't blindly reset to datasetPath. Use project paths if available.
-        // This ensures we jump to the correct folder (e.g. processed) where images actually exist.
-        if (!annotationPath || annotationPath !== (projectPaths?.processed || datasetPath)) {
-            if (projectPaths?.processed) {
-                setAnnotationPath(projectPaths.processed);
-            } else {
-                setAnnotationPath(datasetPath);
-            }
+    const jumpToAnnotation = (imageName, forcePath = null) => {
+        // Fix: Allow forcing a specific path (e.g. raw or dynamic source) to ensure we edit what we see.
+        const targetPath = forcePath || (projectPaths?.processed || datasetPath);
+
+        if (annotationPath !== targetPath) {
+            setAnnotationPath(targetPath);
         }
 
         setJumpToImageName(imageName);

@@ -87,3 +87,6 @@ masked_images/
 # Temporary / Scratch
 tmp/
 temp/
+
+# pid files
+webui/*.pid

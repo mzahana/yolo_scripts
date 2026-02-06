@@ -238,7 +238,7 @@ const VerificationGallery = ({
                                         <button
                                             className="btn"
                                             style={{ flex: 1, padding: '8px 5px', fontSize: '0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
-                                            onClick={() => onJumpToAnnotation(img.name)}
+                                            onClick={() => onJumpToAnnotation(img.name, dynamicRenderPath)}
                                             title="Jump to Annotation Tool"
                                         >
                                             ✏️ Edit
