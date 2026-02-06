@@ -27,8 +27,9 @@ const TerminalInstance = ({ visible }) => {
         addLog("Connecting...");
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const hostname = window.location.hostname;
-        const wsUrl = `${protocol}//${hostname}:8000/api/ws/terminal`;
+        // Fix: Use window.location.host (includes port) to go through the Vite proxy
+        // This ensures it works when accessed via SSH tunnel on a different port (e.g. 3002)
+        const wsUrl = `${protocol}//${window.location.host}/api/ws/terminal`;
 
         try {
             const ws = new WebSocket(wsUrl);
