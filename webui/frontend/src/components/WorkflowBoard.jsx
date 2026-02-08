@@ -11,6 +11,7 @@ const WorkflowBoard = ({ projectPath, currentUser, onOpenJob, onOpenReview }) =>
     const [loading, setLoading] = useState(false);
     const [lastSync, setLastSync] = useState(new Date());
     const [isAutoRefresh, setIsAutoRefresh] = useState(true);
+    const [isFirstLoad, setIsFirstLoad] = useState(true);
 
     // Modal State
     const [showCreateModal, setShowCreateModal] = useState(false);
@@ -64,6 +65,7 @@ const WorkflowBoard = ({ projectPath, currentUser, onOpenJob, onOpenReview }) =>
 
             await Promise.all([p1, p2, p3]);
             setLastSync(new Date());
+            setIsFirstLoad(false);
         } finally {
             setLoading(false);
         }
@@ -195,14 +197,15 @@ const WorkflowBoard = ({ projectPath, currentUser, onOpenJob, onOpenReview }) =>
                 <div style={{ display: 'flex', gap: '8px' }}>
                     <button
                         className="btn"
-                        style={{ padding: '2px 10px', fontSize: '0.7rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)' }}
+                        style={{ padding: '2px 10px', fontSize: '0.7rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', opacity: loading ? 0.5 : 1 }}
                         onClick={() => setIsAutoRefresh(!isAutoRefresh)}
+                        disabled={loading}
                     >
                         {isAutoRefresh ? 'Pause' : 'Resume'}
                     </button>
                     <button
                         className="btn"
-                        style={{ padding: '2px 10px', fontSize: '0.7rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)' }}
+                        style={{ padding: '2px 10px', fontSize: '0.7rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', opacity: loading ? 0.5 : 1 }}
                         onClick={fetchData}
                         disabled={loading}
                     >
@@ -210,6 +213,33 @@ const WorkflowBoard = ({ projectPath, currentUser, onOpenJob, onOpenReview }) =>
                     </button>
                 </div>
             </div>
+
+            {loading && isFirstLoad && (
+                <div style={{
+                    position: 'absolute',
+                    top: 0, left: 0, right: 0, bottom: 0,
+                    background: 'rgba(0,0,0,0.7)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 100,
+                    borderRadius: '12px',
+                    backdropFilter: 'blur(4px)'
+                }}>
+                    <div style={{
+                        width: '40px',
+                        height: '40px',
+                        border: '4px solid rgba(255,255,255,0.1)',
+                        borderTop: '4px solid #6366f1',
+                        borderRadius: '50%',
+                        animation: 'spin 1s linear infinite',
+                        marginBottom: '15px'
+                    }}></div>
+                    <h3 style={{ margin: 0 }}>Initializing Workflow...</h3>
+                    <p style={{ color: '#888', marginTop: '10px' }}>Scanning dataset and preparing state. Please wait.</p>
+                </div>
+            )}
 
             <div className="workflow-board" style={{ display: 'flex', gap: '20px', padding: '20px', flex: 1, overflowX: 'auto' }}>
 
@@ -219,7 +249,12 @@ const WorkflowBoard = ({ projectPath, currentUser, onOpenJob, onOpenReview }) =>
                     <div className="card">
                         <div className="stat-number">{unassignedCount}</div>
                         <div>Images Available</div>
-                        <button className="primary-btn" style={{ marginTop: '10px', width: '100%' }} onClick={() => openCreateModal('unassigned')}>
+                        <button
+                            className="primary-btn"
+                            style={{ marginTop: '10px', width: '100%', opacity: loading ? 0.5 : 1 }}
+                            onClick={() => openCreateModal('unassigned')}
+                            disabled={loading}
+                        >
                             Create Annotation Job
                         </button>
                         <div style={{ fontSize: '0.8em', color: '#888', marginTop: '5px' }}>
@@ -332,8 +367,9 @@ const WorkflowBoard = ({ projectPath, currentUser, onOpenJob, onOpenReview }) =>
                         {doneJobs.length === 0 && datasetCount > 0 && (
                             <button
                                 className="danger-btn"
-                                style={{ marginTop: '10px', width: '100%', fontSize: '0.9em' }}
+                                style={{ marginTop: '10px', width: '100%', fontSize: '0.9em', opacity: loading ? 0.5 : 1 }}
                                 onClick={() => handleResetDataset()}
+                                disabled={loading}
                             >
                                 Reset Dataset to Unassigned
                             </button>
@@ -541,6 +577,10 @@ const WorkflowBoard = ({ projectPath, currentUser, onOpenJob, onOpenReview }) =>
                     justify-content: flex-end;
                     gap: 10px;
                     margin-top: 20px;
+                }
+                @keyframes spin {
+                    from { transform: rotate(0deg); }
+                    to { transform: rotate(360deg); }
                 }
             `}</style>
         </div>

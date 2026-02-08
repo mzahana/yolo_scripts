@@ -134,16 +134,14 @@ class WorkflowManager:
                              "last_updated": datetime.now().isoformat()
                          }
                          
+             # Create lookup for stem -> image name for O(1) matching
+             stem_to_img = {Path(img_name).stem: img_name for img_name in state_data["images"]}
+             
              # 2. Mark Dataset images (in annotations/)
              if annotations_dir.exists():
                  for f in annotations_dir.glob("*.txt"):
                      stem = f.stem
-                     # Find image key with same stem
-                     matched_img = None
-                     for img_name in state_data["images"]:
-                         if Path(img_name).stem == stem:
-                             matched_img = img_name
-                             break
+                     matched_img = stem_to_img.get(stem)
                      
                      if matched_img:
                          state_data["images"][matched_img]["status"] = "dataset"
