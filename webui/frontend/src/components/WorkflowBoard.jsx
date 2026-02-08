@@ -241,7 +241,7 @@ const WorkflowBoard = ({ projectPath, currentUser, onOpenJob, onOpenReview }) =>
                 </div>
             )}
 
-            <div className="workflow-board" style={{ display: 'flex', gap: '20px', padding: '20px', flex: 1, overflowX: 'auto' }}>
+            <div className="workflow-board" style={{ display: 'flex', gap: '12px', padding: '15px', flex: 1, overflowX: 'auto', background: 'transparent' }}>
 
                 {/* Unassigned Column */}
                 <div className="board-column">
@@ -469,10 +469,11 @@ const WorkflowBoard = ({ projectPath, currentUser, onOpenJob, onOpenReview }) =>
             <style>{`
                 .board-column {
                     flex: 1;
-                    min-width: 250px;
-                    background: rgba(255, 255, 255, 0.05);
+                    min-width: 200px;
+                    max-width: 400px;
+                    background: rgba(255, 255, 255, 0.03);
                     border-radius: 8px;
-                    padding: 10px;
+                    padding: 8px;
                     display: flex;
                     flex-direction: column;
                 }
@@ -583,7 +584,7 @@ const WorkflowBoard = ({ projectPath, currentUser, onOpenJob, onOpenReview }) =>
                     to { transform: rotate(360deg); }
                 }
             `}</style>
-        </div>
+        </div >
     );
 };
 

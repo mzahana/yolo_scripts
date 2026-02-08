@@ -1820,7 +1820,7 @@ function App() {
 
 
                     {activeTab === 'workflow' && (
-                        <div style={{ padding: '20px', height: '100vh', overflowY: 'auto' }}>
+                        <div style={{ padding: '0px', height: '100vh', overflow: 'hidden' }}>
                             <WorkflowBoard
                                 projectPath={datasetPath}
                                 currentUser={currentUser}
