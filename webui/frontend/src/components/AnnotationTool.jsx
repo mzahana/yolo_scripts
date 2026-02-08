@@ -4,7 +4,7 @@ import axios from 'axios';
 const API_BASE = '/api';
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
 
-const AnnotationTool = ({ datasetPath, selectedSplit, onPathChange, samModelPath, setSamModelPath, onBrowse, jumpToImageName, onJumpComplete, onSave }) => {
+const AnnotationTool = ({ datasetPath, selectedSplit, onPathChange, samModelPath, setSamModelPath, onBrowse, jumpToImageName, onJumpComplete, onSave, jobId, currentJob, onReviewAction, projectPath }) => {
     const [images, setImages] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [loading, setLoading] = useState(false);
@@ -37,23 +37,46 @@ const AnnotationTool = ({ datasetPath, selectedSplit, onPathChange, samModelPath
 
     // Fetch initial data
     useEffect(() => {
-        if (!datasetPath) return;
+        if (!datasetPath && !jobId) return;
 
         const loadInit = async () => {
-            console.log("Trace: loadInit START for path:", datasetPath);
-            setImages([]); // Clear previous images to avoid jump mismatch
+            console.log("Trace: loadInit START. Job:", jobId, "Path:", datasetPath);
+            setImages([]);
             setLoading(true);
             try {
-                // Get Classes
-                const clsRes = await axios.get(`${API_BASE}/dataset/classes?path=${encodeURIComponent(datasetPath)}`);
-                setClasses(clsRes.data.classes);
+                // Get Classes (Project Wide)
+                // Use projectPath if available, else datasetPath
+                const clsPath = projectPath || datasetPath;
+                if (clsPath) {
+                    const clsRes = await axios.get(`${API_BASE}/dataset/classes?path=${encodeURIComponent(clsPath)}`);
+                    setClasses(clsRes.data.classes);
+                }
 
-                // Get Images
-                const splitParam = selectedSplit ? `&split=${selectedSplit}` : '';
-                const imgRes = await axios.get(`${API_BASE}/labeled/images?path=${encodeURIComponent(datasetPath)}&limit=10000${splitParam}`);
-                const imgList = imgRes.data.images || [];
-                console.log("Trace: loadInit fetched", imgList.length, "images");
-                setImages(imgList);
+                if (jobId) {
+                    // Job Mode: Fetch job details directly to ensure freshness
+                    console.log(`Trace: Fetching job ${jobId} details...`);
+                    const jobRes = await axios.get(`${API_BASE}/workflow/job/${jobId}?project_path=${encodeURIComponent(projectPath || datasetPath)}`);
+                    const fetchedJob = jobRes.data;
+
+                    if (fetchedJob && fetchedJob.images) {
+                        const jobImages = Object.keys(fetchedJob.images).map(name => ({
+                            name: name,
+                            ...fetchedJob.images[name]
+                        }));
+                        // Filter out done images
+                        const pendingImages = jobImages.filter(img => img.status !== 'done');
+                        console.log(`Trace: Job ${jobId} loaded. Total: ${jobImages.length}, Pending: ${pendingImages.length}`);
+                        setImages(pendingImages);
+                    } else {
+                        setImages([]);
+                    }
+                } else {
+                    // Standard Mode
+                    const splitParam = selectedSplit ? `&split=${selectedSplit}` : '';
+                    const imgRes = await axios.get(`${API_BASE}/labeled/images?path=${encodeURIComponent(datasetPath)}&limit=10000${splitParam}`);
+                    const imgList = imgRes.data.images || [];
+                    setImages(imgList);
+                }
 
                 // Only reset to 0 if we are NOT jumping
                 if (!jumpToImageName) {
@@ -70,7 +93,7 @@ const AnnotationTool = ({ datasetPath, selectedSplit, onPathChange, samModelPath
             }
         };
         loadInit();
-    }, [datasetPath, selectedSplit]);
+    }, [datasetPath, selectedSplit, jobId, currentJob]);
 
     // Separate effect for jumping, so it works even if datasetPath doesn't change
     useEffect(() => {
@@ -100,8 +123,8 @@ const AnnotationTool = ({ datasetPath, selectedSplit, onPathChange, samModelPath
 
     // Load current image and existing annotations
     useEffect(() => {
-        if (images.length === 0 || !datasetPath || jumpInProgress) {
-            console.log("Trace: loadData SKIPPED. images.length=", images.length, "datasetPath=", datasetPath, "jumpInProgress=", jumpInProgress);
+        if (images.length === 0 || (!datasetPath && !jobId) || jumpInProgress) {
+            console.log("Trace: loadData SKIPPED.", images.length, datasetPath, jobId, jumpInProgress);
             setImageObj(null);
             setAnnotations([]);
             return;
@@ -128,18 +151,49 @@ const AnnotationTool = ({ datasetPath, selectedSplit, onPathChange, samModelPath
             };
 
             // Use timestamp to avoid cache issues
+            // For Job Mode, we rely on datasetPath being set to the source dir (Processed or Dataset)
             img.src = `${API_BASE}/annotation/image_file?path=${encodeURIComponent(datasetPath)}&image_name=${encodeURIComponent(imgName)}&t=${new Date().getTime()}`;
 
             // Load Annotations
             try {
-                const annRes = await axios.get(`${API_BASE}/annotation/data?path=${encodeURIComponent(datasetPath)}&image_name=${encodeURIComponent(imgName)}`);
-                setAnnotations(annRes.data.annotations);
+                if (jobId) {
+                    // Load Job Annotation (WIP)
+                    const annRes = await axios.get(`${API_BASE}/workflow/job/${jobId}/annotation`, {
+                        params: { image_name: imgName, project_path: projectPath }
+                    });
+
+                    // The backend returns raw content string currently. 
+                    // Need to parse YOLO format if content exists.
+                    if (annRes.data.content) {
+                        // TODO: Simple YOLO parser
+                        const lines = annRes.data.content.trim().split('\n');
+                        const parsed = lines.map(line => {
+                            if (!line.trim()) return null;
+                            const parts = line.trim().split(' ').map(Number);
+                            if (parts.length >= 5) {
+                                return {
+                                    class_id: parts[0],
+                                    type: parts.length > 5 ? 'polygon' : 'box',
+                                    points: parts.slice(1)
+                                };
+                            }
+                            return null;
+                        }).filter(Boolean);
+                        setAnnotations(parsed);
+                    } else {
+                        setAnnotations([]);
+                    }
+                } else {
+                    // Standard Mode
+                    const annRes = await axios.get(`${API_BASE}/annotation/data?path=${encodeURIComponent(datasetPath)}&image_name=${encodeURIComponent(imgName)}`);
+                    setAnnotations(annRes.data.annotations);
+                }
             } catch (err) {
                 setAnnotations([]);
             }
         };
         loadData();
-    }, [currentIndex, images, datasetPath, jumpInProgress]);
+    }, [currentIndex, images, datasetPath, jumpInProgress, jobId]);
 
     // Keyboard Navigation
     useEffect(() => {
@@ -431,11 +485,24 @@ const AnnotationTool = ({ datasetPath, selectedSplit, onPathChange, samModelPath
             }
         }
         try {
-            await axios.post(`${API_BASE}/annotation/save`, {
-                dataset_path: datasetPath,
-                image_name: images[currentIndex].name,
-                annotations: annotations
-            });
+            if (jobId) {
+                // Construct YOLO format string
+                const content = annotations.map(ann => {
+                    return `${ann.class_id} ${ann.points.join(' ')}`;
+                }).join('\n');
+
+                await axios.post(`${API_BASE}/workflow/job/${jobId}/annotation`, {
+                    project_path: projectPath,
+                    image_name: images[currentIndex].name,
+                    content: content
+                });
+            } else {
+                await axios.post(`${API_BASE}/annotation/save`, {
+                    dataset_path: datasetPath,
+                    image_name: images[currentIndex].name,
+                    annotations: annotations
+                });
+            }
             if (onSave) onSave(images[currentIndex].name);
             alert('Saved!');
         } catch (err) {
@@ -448,8 +515,12 @@ const AnnotationTool = ({ datasetPath, selectedSplit, onPathChange, samModelPath
             <div className="glass" style={{ padding: '10px 20px', display: 'flex', alignItems: 'center', gap: '15px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', flex: 1, gap: '4px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <span style={{ fontWeight: 'bold', fontSize: '0.9rem', opacity: 0.7 }}>📂 Dataset:</span>
-                        <span style={{ fontSize: '0.9rem', fontFamily: 'monospace', color: 'var(--primary)' }}>{datasetPath}</span>
+                        <span style={{ fontWeight: 'bold', fontSize: '0.9rem', opacity: 0.7 }}>
+                            {jobId ? '📋 Job:' : '📂 Dataset:'}
+                        </span>
+                        <span style={{ fontSize: '0.9rem', fontFamily: 'monospace', color: 'var(--primary)' }}>
+                            {jobId ? (currentJob?.name || jobId) : datasetPath}
+                        </span>
                         {selectedSplit && selectedSplit !== 'all' && (
                             <span style={{ marginLeft: '10px', padding: '1px 8px', background: 'var(--primary)', color: '#000', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold', textTransform: 'uppercase' }}>
                                 {selectedSplit}
@@ -543,8 +614,14 @@ const AnnotationTool = ({ datasetPath, selectedSplit, onPathChange, samModelPath
                                         </div>
                                     </>
                                 ) : (
-                                    <div style={{ color: 'white', opacity: 0.5 }}>
-                                        {images.length === 0 ? 'No images found' : 'No Image Selected'}
+                                    <div style={{ color: 'white', opacity: 0.5, textAlign: 'center' }}>
+                                        <p>{images.length === 0 ? 'No images found' : 'No Image Selected'}</p>
+                                        {jobId && (
+                                            <div style={{ fontSize: '0.8rem', marginTop: '10px' }}>
+                                                Job ID: {jobId} <br />
+                                                <button className="btn" style={{ marginTop: '5px' }} onClick={() => window.location.reload()}>Reload Page</button>
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </div>
@@ -685,6 +762,38 @@ const AnnotationTool = ({ datasetPath, selectedSplit, onPathChange, samModelPath
                                 >
                                     💾 Save Labels
                                 </button>
+
+                                {/* Review Controls */}
+                                {jobId && onReviewAction && (
+                                    <div style={{ marginTop: '20px', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '10px' }}>
+                                        <h4 style={{ margin: '0 0 10px 0' }}>Review Status</h4>
+                                        <div style={{ marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                            Current:
+                                            <span className={`status-tag ${images[currentIndex]?.status || 'pending'}`} style={{ padding: '2px 5px', borderRadius: '4px', background: '#333' }}>
+                                                {images[currentIndex]?.status || 'pending'}
+                                            </span>
+                                        </div>
+                                        <div style={{ display: 'flex', gap: '10px' }}>
+                                            <button
+                                                className="btn"
+                                                style={{ flex: 1, background: '#ef4444', color: 'white' }}
+                                                onClick={() => {
+                                                    const reason = prompt("Rejection Reason:");
+                                                    if (reason !== null) onReviewAction(images[currentIndex].name, 'reject', reason);
+                                                }}
+                                            >
+                                                Reject
+                                            </button>
+                                            <button
+                                                className="btn"
+                                                style={{ flex: 1, background: '#10b981', color: 'white' }}
+                                                onClick={() => onReviewAction(images[currentIndex].name, 'approve')}
+                                            >
+                                                Approve
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </>
                     )}

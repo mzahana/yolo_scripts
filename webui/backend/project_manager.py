@@ -6,6 +6,7 @@ import random
 from pathlib import Path
 from typing import List, Optional, Dict
 from pydantic import BaseModel
+from workflow_manager import WorkflowManager
 
 class ProjectConfig(BaseModel):
     name: str
@@ -55,13 +56,22 @@ class ProjectManager:
             d.mkdir(parents=True, exist_ok=True)
             
         # Move raw images folder instead of copying (Efficiency)
-        source_path = Path(raw_images_source)
-        target_path = dirs["raw"]
-        
-        if source_path.exists() and source_path.is_dir():
-             shutil.move(str(source_path), str(target_path))
+        if raw_images_source and raw_images_source.strip():
+            source_path = Path(raw_images_source)
+            target_path = dirs["raw"]
+            
+            # Ensure we are not moving the parent dir or current dir
+            # Also catch if source_path resolves to target_path parent
+            try:
+                if source_path.exists() and source_path.is_dir() and source_path.resolve() != Path('.').resolve():
+                     shutil.move(str(source_path), str(target_path))
+                else:
+                     target_path.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                print(f"Warning: Could not move raw images: {e}")
+                target_path.mkdir(parents=True, exist_ok=True)
         else:
-             target_path.mkdir(parents=True, exist_ok=True)
+            dirs["raw"].mkdir(parents=True, exist_ok=True)
 
         # Create classes.txt
         with open(project_root / ProjectManager.CLASSES_FILENAME, 'w') as f:
@@ -326,9 +336,26 @@ class ProjectManager:
             if item.is_file() and item.suffix.lower() in image_exts:
                 images.append(item)
                 
-        # Filter those that have annotations
+        # Filter those that have annotations AND are approved in workflow
+        # Load workflow state
+        workflow_state_path = root / "workflow_state.json"
+        approved_images = set()
+        if workflow_state_path.exists():
+            try:
+                with open(workflow_state_path, 'r') as f:
+                     state = json.load(f)
+                     for img_name, data in state.get("images", {}).items():
+                         if data.get("status") == "dataset":
+                             approved_images.add(img_name)
+            except Exception as e:
+                print(f"Error reading workflow state: {e}")
+
         valid_pairs = []
         for img in images:
+            # Check if image is approved
+            if workflow_state_path.exists() and img.name not in approved_images:
+                continue
+
             txt_path = source_labels / f"{img.stem}.txt"
             if txt_path.exists():
                 valid_pairs.append((img, txt_path))

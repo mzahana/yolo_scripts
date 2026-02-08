@@ -58,7 +58,7 @@ start() {
     else
         echo "Starting Backend..."
         cd "$BACKEND_DIR" || exit
-        nohup python main.py > "../$BACKEND_LOG" 2>&1 &
+        nohup python -u main.py > "../$BACKEND_LOG" 2>&1 &
         echo $! > "../$BACKEND_PID_FILE"
         cd ..
         echo "Backend started (PID: $(cat $BACKEND_PID_FILE))"

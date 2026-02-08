@@ -136,9 +136,8 @@ class YOLODatasetSplitter:
         return dirs
 
     def get_image_files(self) -> List[Path]:
-        """Get all image files from the images directory or all splits."""
+        """Get all image files from the images directory."""
         image_files = []
-        
         if self.is_already_split:
             for split in ['train', 'valid', 'test', 'val']:
                 split_img_dir = self.parent_dir / split / 'images'

@@ -23,6 +23,7 @@ from data_augmentation_manager import DataAugmentationManager
 from terminal_manager import terminal_manager
 from simple_augmentation_manager import SimpleAugmentationManager
 from fastapi.responses import StreamingResponse
+from workflow_manager import WorkflowManager, Job
 import io
 import torch
 
@@ -39,6 +40,7 @@ except ImportError as e:
     print(f"Error importing scripts/ultralytics: {e}")
 
 app = FastAPI()
+print("DEBUG: main.py STARTING - VERIFICATION ID 999")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1212,7 +1214,7 @@ def run_autolabel_task(request: AutoLabelRequest):
             with open(project_config_path, 'w') as f:
                 json.dump(p_config, f, indent=4)
                 
-            # Update result for frontend
+            # Update result for frontend    
             app.state.task_progress["status"] = "idle"
             app.state.task_progress["message"] = "Auto-labeling complete!"
             app.state.task_progress["result"] = {
@@ -3419,6 +3421,199 @@ def stop_export():
 @app.get("/api/export/status")
 def get_export_status():
     return export_manager.get_state()
+
+
+
+
+from workflow_manager import WorkflowManager, Job
+
+# ... existing code ...
+
+# Workflow API Models
+class WorkflowJobCreateRequest(BaseModel):
+    project_path: str
+    batch_size: int
+    annotator: str
+    reviewer: str
+    source: str = "unassigned"
+    include_annotated: Optional[bool] = False
+    source_job_id: Optional[str] = None
+
+class WorkflowJobActionRequest(BaseModel):
+    project_path: str
+
+class WorkflowAnnotationSaveRequest(BaseModel):
+    project_path: str
+    image_name: str
+    content: str
+
+class WorkflowImageActionRequest(BaseModel):
+    project_path: str
+    image_name: str
+    comment: Optional[str] = None
+
+class UserRegisterRequest(BaseModel):
+    project_path: str
+    name: str
+
+# Workflow Endpoints
+
+@app.get("/api/workflow/unassigned")
+def get_workflow_unassigned_count(project_path: str):
+    try:
+        wm = WorkflowManager(project_path)
+        count = wm.get_unassigned_count()
+        return {"count": count}
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/workflow/dataset")
+def get_workflow_dataset_count(project_path: str):
+    try:
+        wm = WorkflowManager(project_path)
+        count = wm.get_dataset_count()
+        return {"count": count}
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/workflow/jobs")
+def get_workflow_jobs(project_path: str):
+    try:
+        wm = WorkflowManager(project_path)
+        return wm.get_jobs()
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/workflow/job/create")
+def create_workflow_job(request: WorkflowJobCreateRequest):
+    try:
+        wm = WorkflowManager(request.project_path)
+        return wm.create_job(
+            request.batch_size,
+            request.annotator,
+            request.reviewer,
+            request.source,
+            request.include_annotated,
+            request.source_job_id
+        )
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/workflow/job/{job_id}/unassign")
+def unassign_workflow_job(job_id: str, request: WorkflowJobActionRequest):
+    try:
+        wm = WorkflowManager(request.project_path)
+        wm.unassign_job(job_id)
+        return {"status": "success"}
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/workflow/job/{job_id}")
+def get_workflow_job(job_id: str, project_path: str):
+    try:
+        wm = WorkflowManager(project_path)
+        job = wm.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return job
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/workflow/job/{job_id}/submit")
+def submit_workflow_job(job_id: str, request: WorkflowJobActionRequest):
+    try:
+        wm = WorkflowManager(request.project_path)
+        wm.submit_job(job_id)
+        return {"status": "success"}
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/workflow/job/{job_id}/approve_all")
+def approve_workflow_job(job_id: str, request: WorkflowJobActionRequest):
+    try:
+        wm = WorkflowManager(request.project_path)
+        wm.approve_job(job_id)
+        return {"status": "success"}
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/workflow/job/{job_id}/return")
+def return_workflow_job(job_id: str, request: WorkflowJobActionRequest):
+    try:
+        wm = WorkflowManager(request.project_path)
+        wm.return_job(job_id)
+        return {"status": "success"}
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/workflow/job/{job_id}/annotation")
+def save_workflow_annotation(job_id: str, request: WorkflowAnnotationSaveRequest):
+    try:
+        wm = WorkflowManager(request.project_path)
+        wm.save_annotation(job_id, request.image_name, request.content)
+        return {"status": "success"}
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/workflow/job/{job_id}/annotation")
+def get_workflow_annotation(job_id: str, image_name: str, project_path: str):
+    try:
+        wm = WorkflowManager(project_path)
+        return wm.get_annotation(job_id, image_name)
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/workflow/dataset/reset")
+def reset_workflow_dataset(request: WorkflowJobActionRequest):
+    try:
+        wm = WorkflowManager(request.project_path)
+        wm.reset_dataset()
+        return {"status": "success"}
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/workflow/job/{job_id}/approve")
+def approve_workflow_image(job_id: str, request: WorkflowImageActionRequest):
+    try:
+        wm = WorkflowManager(request.project_path)
+        wm.approve_image(job_id, request.image_name)
+        return {"status": "success"}
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/workflow/job/{job_id}/reject")
+def reject_workflow_image(job_id: str, request: WorkflowImageActionRequest):
+    try:
+        wm = WorkflowManager(request.project_path)
+        wm.reject_image(job_id, request.image_name, request.comment or "")
+        return {"status": "success"}
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/workflow/users")
+def get_workflow_users(project_path: str):
+    try:
+        wm = WorkflowManager(project_path)
+        return wm.get_users()
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/workflow/users/register")
+def register_workflow_user(request: UserRegisterRequest):
+    try:
+        wm = WorkflowManager(request.project_path)
+        return wm.register_user(request.name)
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/workflow/dataset/reset")
+def reset_workflow_dataset(request: WorkflowJobActionRequest):
+    try:
+        wm = WorkflowManager(request.project_path)
+        wm.reset_dataset()
+        return {"status": "success"}
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn

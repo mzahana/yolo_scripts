@@ -18,6 +18,7 @@ import DatasetSampling from './components/DatasetSampling';
 import TrainingView from './components/TrainingView';
 import DatasetToolsPage from './pages/DatasetToolsPage';
 import WebTerminal from './components/Terminal';
+import WorkflowBoard from './components/WorkflowBoard';
 
 const API_BASE = '/api';
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
@@ -79,6 +80,7 @@ function App() {
         { id: 'project_home', label: 'Project Info', icon: '🏠' },
         { type: 'header', label: 'ANNOTATION' },
         { id: 'annotation', label: 'Manual Annotation', icon: '✏️' },
+        { id: 'workflow', label: 'Workflow', icon: '📋' },
         { id: 'labeling', label: 'Auto-Labeling', icon: '🤖' },
         { type: 'header', label: 'PROCESSING' },
         { id: 'preprocess', label: 'Pre-processing', icon: '✂️' },
@@ -160,6 +162,95 @@ function App() {
     const showNotification = (msg) => {
         setNotification(msg);
         setTimeout(() => setNotification(''), 3000);
+    };
+
+    // Workflow State
+    const [currentUser, setCurrentUser] = useState(() => localStorage.getItem('yolo_user') || '');
+    const [users, setUsers] = useState([]);
+    const [showUserModal, setShowUserModal] = useState(false);
+    const [currentJob, setCurrentJob] = useState(null);
+    const [reviewMode, setReviewMode] = useState(false);
+
+    const fetchUsers = async () => {
+        if (!datasetPath) return;
+        try {
+            const res = await axios.get(`${API_BASE}/workflow/users?project_path=${encodeURIComponent(datasetPath)}`);
+            setUsers(res.data);
+            // If current user is not in the list (except admin which is guaranteed), we might need to sync
+        } catch (err) {
+            console.error("Error fetching users:", err);
+            setUsers(['admin']);
+        }
+    };
+
+    useEffect(() => {
+        if (datasetPath) {
+            fetchUsers();
+        }
+    }, [datasetPath]);
+
+    const handleSetUser = () => {
+        setShowUserModal(true);
+        fetchUsers();
+    };
+
+    const handleRegisterUser = async (name) => {
+        if (!name || !datasetPath) return;
+        try {
+            const res = await axios.post(`${API_BASE}/workflow/users/register`, {
+                project_path: datasetPath,
+                name: name
+            });
+            setUsers(res.data);
+            return res.data;
+        } catch (err) {
+            alert("Error registering user");
+        }
+    };
+
+    const selectUser = (name) => {
+        setCurrentUser(name);
+        localStorage.setItem('yolo_user', name);
+        setShowUserModal(false);
+    };
+
+    const handleOpenJob = (job) => {
+        setCurrentJob(job);
+        setReviewMode(false);
+        setActiveTab('annotation');
+    };
+
+    const handleOpenReview = (job) => {
+        setCurrentJob(job);
+        setReviewMode(true);
+        setActiveTab('annotation');
+    };
+
+    const handleReviewAction = async (imageName, action, comment) => {
+        if (!currentJob) return;
+        try {
+            await axios.post(`${API_BASE}/workflow/job/${currentJob.id}/${action}`, {
+                project_path: datasetPath,
+                image_name: imageName,
+                comment: comment
+            });
+
+            // Optimistic update
+            setCurrentJob(prev => {
+                const newImages = { ...prev.images };
+                if (newImages[imageName]) {
+                    newImages[imageName] = {
+                        ...newImages[imageName],
+                        status: action === 'approve' ? 'done' : 'rejected'
+                    };
+                }
+                return { ...prev, images: newImages };
+            });
+
+            showNotification(`Image ${action}d`);
+        } catch (err) {
+            alert(`Error ${action}ing image`);
+        }
     };
 
     // Polling for progress
@@ -670,6 +761,7 @@ function App() {
             setAnnotationPath(targetPath);
         }
 
+        setCurrentJob(null); // Ensure we switch out of any active workflow job context
         setJumpToImageName(imageName);
         setActiveTab('annotation');
     };
@@ -1423,6 +1515,35 @@ function App() {
                     </div>
                 </nav>
 
+                <div style={{ padding: '0 20px 20px 20px' }}>
+                    <button
+                        onClick={handleSetUser}
+                        className="btn"
+                        style={{
+                            width: '100%',
+                            background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+                            color: 'white',
+                            boxShadow: '0 4px 12px rgba(99, 102, 241, 0.3)',
+                            borderRadius: '10px',
+                            padding: '12px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '12px',
+                            fontWeight: 'bold',
+                            border: 'none',
+                        }}
+                    >
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="12" cy="7" r="4"></circle>
+                        </svg>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {currentUser || 'Set User'}
+                        </span>
+                    </button>
+                </div>
+
                 <div style={{ marginTop: 'auto', padding: '20px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', fontSize: '0.8rem' }}>
                     <div style={{ color: 'var(--text-muted)', marginBottom: '10px' }}>Task Status</div>
                     {isTaskRunning ? (
@@ -1698,11 +1819,22 @@ function App() {
                     )}
 
 
+                    {activeTab === 'workflow' && (
+                        <div style={{ padding: '20px', height: '100vh', overflowY: 'auto' }}>
+                            <WorkflowBoard
+                                projectPath={datasetPath}
+                                currentUser={currentUser}
+                                onOpenJob={handleOpenJob}
+                                onOpenReview={handleOpenReview}
+                            />
+                        </div>
+                    )}
+
                     {activeTab === 'annotation' && (
-                        <section className="glass section-card" style={{ height: 'calc(100vh - 150px)', overflow: 'hidden', padding: '10px' }}>
+                        <section className="glass section-card" style={{ height: 'calc(100vh - 100px)', overflow: 'hidden', padding: '10px' }}>
                             <AnnotationTool
-                                key={`${annotationPath}-${selectedSplit}`}
-                                datasetPath={annotationPath}
+                                key={`${annotationPath}-${selectedSplit}-${currentJob?.id}`}
+                                datasetPath={currentJob ? (projectPaths?.processed || datasetPath) : annotationPath}
                                 selectedSplit={selectedSplit}
                                 onPathChange={setAnnotationPath}
                                 samModelPath={samModelPath}
@@ -1711,6 +1843,10 @@ function App() {
                                 jumpToImageName={jumpToImageName}
                                 onJumpComplete={() => setJumpToImageName(null)}
                                 onSave={() => setCacheBuster(Date.now())}
+                                jobId={currentJob?.id}
+                                currentJob={currentJob}
+                                onReviewAction={reviewMode ? handleReviewAction : null}
+                                projectPath={datasetPath}
                             />
                         </section>
                     )}
@@ -2094,6 +2230,87 @@ function App() {
                     }
                 </div >
             </main >
+
+            {/* User Selection Modal */}
+            {showUserModal && (
+                <div className="modal-overlay" style={{ zIndex: 2000 }}>
+                    <div className="modal-content glass" style={{ width: '400px', padding: '25px', borderRadius: '16px' }}>
+                        <h2 style={{ marginTop: 0, marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            👤 Select User
+                        </h2>
+
+                        <div style={{
+                            maxHeight: '250px',
+                            overflowY: 'auto',
+                            marginBottom: '20px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '8px',
+                            padding: '5px'
+                        }}>
+                            {users.map(u => (
+                                <div
+                                    key={u}
+                                    onClick={() => selectUser(u)}
+                                    style={{
+                                        padding: '12px 15px',
+                                        background: currentUser === u ? 'rgba(99, 102, 241, 0.2)' : 'rgba(255,255,255,0.05)',
+                                        border: currentUser === u ? '1px solid #6366f1' : '1px solid rgba(255,255,255,0.1)',
+                                        borderRadius: '8px',
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        alignItems: 'center',
+                                        fontWeight: currentUser === u ? 'bold' : 'normal'
+                                    }}
+                                >
+                                    <span>{u}</span>
+                                    {u === 'admin' && <span style={{ fontSize: '0.7em', padding: '2px 6px', background: '#4b5563', borderRadius: '4px' }}>Admin</span>}
+                                    {currentUser === u && <span>✅</span>}
+                                </div>
+                            ))}
+                        </div>
+
+                        <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '20px' }}>
+                            <div className="form-group">
+                                <label>Or Register New User</label>
+                                <div style={{ display: 'flex', gap: '10px' }}>
+                                    <input
+                                        type="text"
+                                        placeholder="Username..."
+                                        id="new-username-input"
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                const val = e.target.value.trim();
+                                                if (val) {
+                                                    handleRegisterUser(val).then(() => selectUser(val));
+                                                }
+                                            }
+                                        }}
+                                    />
+                                    <button
+                                        className="primary-btn"
+                                        style={{ padding: '0 15px' }}
+                                        onClick={() => {
+                                            const input = document.getElementById('new-username-input');
+                                            const val = input.value.trim();
+                                            if (val) {
+                                                handleRegisterUser(val).then(() => selectUser(val));
+                                            }
+                                        }}
+                                    >
+                                        Add
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="modal-actions" style={{ marginTop: '20px' }}>
+                            <button className="btn" style={{ width: '100%' }} onClick={() => setShowUserModal(false)}>Close</button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div >
     );
 }
