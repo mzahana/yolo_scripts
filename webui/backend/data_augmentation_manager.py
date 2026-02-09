@@ -17,7 +17,7 @@ from data_augmentation import DataAugmentor
 
 class DataAugmentationManager:
     
-    _cached_sample: Optional[Dict] = None
+    _cached_samples = [] # List of {image_path, label_line, preview_location}
 
     @staticmethod
     def save_temp_background(file_bytes: bytes, filename: str) -> str:
@@ -74,13 +74,16 @@ class DataAugmentationManager:
         }
 
     @staticmethod
-    def sample_object(
+    def sample_for_preview(
         dataset_path: str,
         class_ids: List[int],
         background_path: str,
+        composition_mode: bool = False,
+        objects_per_image: int = 3,
+        roi: Optional[List[float]] = None
     ) -> Dict:
         """
-        Picks a random object, caches it, and returns the 'Original' preview (on background, no augs).
+        Picks random object(s), caches them, and returns the 'Original' preview (on background, no augs).
         """
         # Find images/labels logic (reused)
         p = Path(dataset_path)
@@ -101,56 +104,95 @@ class DataAugmentationManager:
         label_files = [f for f in os.listdir(labels_dir) if f.endswith('.txt')]
         np.random.shuffle(label_files)
         
-        selected_file = None
-        selected_line = None
         
-        for lf in label_files[:100]:
-            with open(os.path.join(labels_dir, lf), 'r') as f:
+        picked_samples = []
+        # Pick more samples than needed to handle placement failures
+        target_count = objects_per_image if composition_mode else 1
+        num_to_pick = target_count * 5 if composition_mode else 1
+        
+        # Try to pick N objects
+        # Robust sampling: iterate through files and pick all valid objects until num_to_pick is reached
+        for lf in label_files:
+            if len(picked_samples) >= num_to_pick:
+                break
+                
+            label_path = os.path.join(labels_dir, lf)
+            with open(label_path, 'r') as f:
                 lines = f.readlines()
                 valid_lines = [l for l in lines if l.strip() and int(l.split()[0]) in class_ids]
-                if valid_lines:
-                    selected_file = lf
-                    selected_line = random.choice(valid_lines)
-                    break
-        
-        if not selected_file:
+                if not valid_lines:
+                    continue
+                
+                # Check if image exists
+                base_name = os.path.splitext(lf)[0]
+                image_path = None
+                for ext in ['.jpg', '.png', '.jpeg', '.bmp', '.JPG', '.PNG']:
+                    cand = os.path.join(images_dir, base_name + ext)
+                    if os.path.exists(cand):
+                        image_path = cand
+                        break
+                
+                if image_path:
+                    # Pick ALL valid objects from this file until we reach num_to_pick
+                    random.shuffle(valid_lines)
+                    for line in valid_lines:
+                        if len(picked_samples) >= num_to_pick:
+                            break
+                        picked_samples.append({
+                            "image_path": str(image_path),
+                            "label_line": line,
+                            "file": lf,
+                            "class_id": int(line.split()[0])
+                        })
+
+        if not picked_samples:
             raise ValueError(f"No objects found for classes {class_ids}")
 
-        base_name = os.path.splitext(selected_file)[0]
-        image_path = None
-        for ext in ['.jpg', '.png', '.jpeg', '.bmp']:
-            cand = os.path.join(images_dir, base_name + ext)
-            if os.path.exists(cand):
-                image_path = cand
-                break
-        
-        if not image_path:
-            raise ValueError(f"Image not found for label {selected_file}")
-
-        # Cache the sample
-        DataAugmentationManager._cached_sample = {
-            "image_path": str(image_path),
-            "label_line": selected_line
-        }
+        # Cache the samples
+        DataAugmentationManager._cached_samples = picked_samples
 
         # Generate 'Original' preview (No augs)
         bg_img = cv2.imread(background_path)
         if bg_img is None: raise ValueError("Background not found")
         
-        # Call generate with NO augs (default params)
-        preview_img = DataAugmentor.generate_single_preview(
-            str(image_path), selected_line, bg_img,
-            None, None, None, None, None, 1.0, None
-        )
+        if composition_mode:
+            # Call composition preview with NO augs, pass limit=target_count
+            preview_img, placed_indices, locations = DataAugmentor.generate_composition_preview(
+                picked_samples, bg_img,
+                None, None, None, None, None, 1.0, roi,
+                max_objects=target_count
+            )
+            # IMPORTANT: Filter picked_samples to only those that were successfully placed
+            final_samples = []
+            for i, p_idx in enumerate(placed_indices):
+                sample = picked_samples[p_idx]
+                sample["preview_location"] = locations[i]
+                final_samples.append(sample)
+            
+            picked_samples = final_samples
+        else:
+            # Call single preview with NO augs
+            sample = picked_samples[0]
+            preview_result = DataAugmentor.generate_single_preview(
+                sample["image_path"], sample["label_line"], bg_img,
+                None, None, None, None, None, 1.0, roi
+            )
+            if preview_result:
+                preview_img, loc = preview_result
+                sample["preview_location"] = loc
+                picked_samples = [sample]
+            else:
+                raise ValueError("Failed to place object in preview")
         
-        if preview_img is None: raise ValueError("Failed to extract object")
+        # Cache the samples (NOW with locations and filtered to placed ones)
+        DataAugmentationManager._cached_samples = picked_samples
 
         _, buffer = cv2.imencode('.jpg', preview_img)
         img_base64 = base64.b64encode(buffer).decode('utf-8')
         
         return {
             "image": f"data:image/jpeg;base64,{img_base64}",
-            "sample_info": {"file": selected_file, "class_id": int(selected_line.split()[0])}
+            "sample_info": picked_samples[0]["file"] if not composition_mode else f"{len(picked_samples)} objects"
         }
 
     @staticmethod
@@ -164,25 +206,43 @@ class DataAugmentationManager:
         region_scale: float,
         roi: Optional[List[float]] = None,
         min_width: int = 0,
-        min_height: int = 0
+        min_height: int = 0,
+        composition_mode: bool = False
     ) -> Dict:
         """
-        Applies augmentation to the currently cached sample object.
+        Applies augmentation to the currently cached sample objects.
         """
-        if not DataAugmentationManager._cached_sample:
-            raise ValueError("No sample object selected. Please draw a sample first.")
-            
-        sample = DataAugmentationManager._cached_sample
+        if not DataAugmentationManager._cached_samples:
+            raise ValueError("No cached samples. Draw a sample first.")
+        
+        samples = DataAugmentationManager._cached_samples
         bg_img = cv2.imread(background_path)
         if bg_img is None: raise ValueError("Background not found")
         
-        roi_tuple = tuple(roi) if roi and len(roi) == 4 else None
+        roi_tuple = tuple(roi) if roi else None
 
-        preview_img = DataAugmentor.generate_single_preview(
-            sample["image_path"], sample["label_line"], bg_img,
-            rotation_range, blur_range, scaling_range, contrast_range, brightness_range, region_scale, roi_tuple,
-            min_width=min_width, min_height=min_height
-        )
+        if composition_mode:
+            # Use cached locations for stability
+            fixed_locs = [s.get("preview_location") for s in samples]
+            preview_img, _, _ = DataAugmentor.generate_composition_preview(
+                samples, bg_img,
+                rotation_range, blur_range, scaling_range, contrast_range, brightness_range, region_scale, roi_tuple,
+                min_width=min_width, min_height=min_height,
+                fixed_locations=fixed_locs
+            )
+        else:
+            sample = samples[0]
+            fixed_loc = sample.get("preview_location")
+            preview_result = DataAugmentor.generate_single_preview(
+                sample["image_path"], sample["label_line"], bg_img,
+                rotation_range, blur_range, scaling_range, contrast_range, brightness_range, region_scale, roi_tuple,
+                min_width=min_width, min_height=min_height,
+                fixed_location=fixed_loc
+            )
+            if preview_result:
+                preview_img, _ = preview_result
+            else:
+                 raise ValueError("Failed to apply preview to object")
         
         if preview_img is None: raise ValueError("Failed to generate preview")
 

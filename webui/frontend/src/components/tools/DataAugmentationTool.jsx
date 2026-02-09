@@ -156,7 +156,10 @@ const DataAugmentationTool = ({
             const res = await axios.post("/api/augmentation/sample", {
                 dataset_path: localDatasetPath,
                 class_ids: selectedClasses,
-                background_path: backgroundPath
+                background_path: backgroundPath,
+                composition_mode: augmentationMode === 'composition',
+                objects_per_image: compObjectsPerImage,
+                roi: [roi.x / 100, roi.y / 100, roi.w / 100, roi.h / 100]
             });
             setOriginalSample(res.data.image);
 
@@ -187,7 +190,9 @@ const DataAugmentationTool = ({
                 contrast_range: params.contrast_range || null,
                 brightness_range: params.brightness_range || null,
                 min_width: excludeSmallObjects ? minSize.w : 0,
-                min_height: excludeSmallObjects ? minSize.h : 0
+                min_height: excludeSmallObjects ? minSize.h : 0,
+                composition_mode: augmentationMode === 'composition',
+                objects_per_image: compObjectsPerImage
             };
 
             const res = await axios.post("/api/augmentation/apply_preview", payload);

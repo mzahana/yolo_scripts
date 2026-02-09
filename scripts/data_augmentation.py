@@ -175,6 +175,45 @@ class DataAugmentor:
         return aug_obj, aug_mask, new_w, new_h, rotation_matrix, scale_factor
 
     @staticmethod
+    def place_object(background, augmented_obj, mask, x, y):
+        """
+        Places an augmented object onto a background at (x, y) using a mask.
+        Handles clipping to background boundaries.
+        """
+        bg_h, bg_w = background.shape[:2]
+        aug_h, aug_w = augmented_obj.shape[:2]
+
+        # Calculate coordinates
+        y1, y2 = y, y + aug_h
+        x1, x2 = x, x + aug_w
+
+        # Clip to background
+        y1_c = max(0, y1)
+        y2_c = min(bg_h, y2)
+        x1_c = max(0, x1)
+        x2_c = min(bg_w, x2)
+
+        if y2_c <= y1_c or x2_c <= x1_c:
+            return
+
+        # Calculate source offsets
+        dy1 = y1_c - y1
+        dy2 = dy1 + (y2_c - y1_c)
+        dx1 = x1_c - x1
+        dx2 = dx1 + (x2_c - x1_c)
+
+        # Masking
+        for c in range(3):
+            bg_slice = background[y1_c:y2_c, x1_c:x2_c, c]
+            obj_slice = augmented_obj[dy1:dy2, dx1:dx2, c]
+            mask_slice = mask[dy1:dy2, dx1:dx2]
+            
+            background[y1_c:y2_c, x1_c:x2_c, c] = (
+                bg_slice * (1 - mask_slice / 255) +
+                obj_slice * (mask_slice / 255)
+            )
+
+    @staticmethod
     def extract_object(image, coords_norm, image_w, image_h, min_width=0, min_height=0):
         """
         Extracts an object from the image using normalized coordinates.
@@ -252,7 +291,8 @@ class DataAugmentor:
         region_scale=0.8,
         roi=None,
         min_width=0,
-        min_height=0
+        min_height=0,
+        fixed_location=None
     ):
         """
         Generates a single preview image by extracting one object and placing it on the background.
@@ -299,7 +339,9 @@ class DataAugmentor:
             return None
             
         # Place
-        if roi:
+        if fixed_location:
+            rand_x, rand_y = fixed_location
+        elif roi:
             # roi is [x, y, w, h] normalized (0-1)
             rx, ry, rw, rh = roi
             # Convert to pixels
@@ -323,16 +365,119 @@ class DataAugmentor:
             rand_y = random.randint(0, max(image_h - new_h, 0))
         
         bg_copy = background_img.copy()
+        DataAugmentor.place_object(bg_copy, aug_obj, aug_mask, rand_x, rand_y)
         
-        for c in range(3):
-            bg_copy[rand_y:rand_y + new_h, rand_x:rand_x + new_w, c] = (
-                bg_copy[rand_y:rand_y + new_h, rand_x:rand_x + new_w, c] * (1 - aug_mask / 255) +
-                aug_obj[:, :, c] * (aug_mask / 255)
-            )
-            
         # Basic visual debug of bbox (Optional, maybe not for final output)
-        return bg_copy
+        return bg_copy, (rand_x, rand_y)
 
+    @staticmethod
+    def generate_composition_preview(
+        samples, background_img,
+        rotation_range=None, blur_range=None,
+        scaling_range=None, contrast_range=None,
+        brightness_range=None,
+        region_scale=0.8,
+        roi=None,
+        min_width=0,
+        min_height=0,
+        fixed_locations=None,
+        max_objects=None
+    ):
+        """
+        Generates a preview by placing multiple sampled objects onto the background.
+        """
+        bg_h, bg_w = background_img.shape[:2]
+        bg_copy = background_img.copy()
+        
+        placed_boxes = []
+        used_locations = []
+        placed_indices = []
+        
+        bound_x_min, bound_y_min = 0, 0
+        bound_x_max, bound_y_max = bg_w, bg_h
+        if roi:
+            rx, ry, rw, rh = roi
+            bound_x_min = int(rx * bg_w)
+            bound_y_min = int(ry * bg_h)
+            bound_x_max = int(min((rx + rw) * bg_w, bg_w))
+            bound_y_max = int(min((ry + rh) * bg_h, bg_h))
+
+        for idx, sample in enumerate(samples):
+            # Check if we reached the max requested objects
+            if max_objects is not None and len(placed_indices) >= max_objects:
+                break
+                
+            src_img = cv2.imread(sample["image_path"])
+            if src_img is None: continue
+            src_h, src_w = src_img.shape[:2]
+            
+            # Extract
+            parts = sample["label_line"].strip().split()
+            if not parts: continue
+            coords = np.array(parts[1:], dtype=float)
+            
+            obj_roi, mask_roi, w, h, _ = DataAugmentor.extract_object(
+                src_img, coords, src_w, src_h, min_width, min_height
+            )
+            if obj_roi is None: continue
+
+            # Augment
+            # max_region should be relative to where it's being placed (background or ROI)
+            roi_w = bound_x_max - bound_x_min
+            roi_h = bound_y_max - bound_y_min
+            max_region_w = int(region_scale * roi_w)
+            max_region_h = int(region_scale * roi_h)
+            
+            aug_obj, aug_mask, new_w, new_h, _, _ = DataAugmentor.apply_augmentations(
+                obj_roi, mask_roi, w, h, 
+                rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
+                max_region_w, max_region_h
+            )
+            if aug_obj is None: continue
+
+            # Try to place
+            placed = False
+            
+            # Use fixed location if provided
+            if fixed_locations and idx < len(fixed_locations) and fixed_locations[idx] is not None:
+                fx, fy = fixed_locations[idx]
+                DataAugmentor.place_object(bg_copy, aug_obj, aug_mask, fx, fy)
+                used_locations.append((fx, fy))
+                placed_boxes.append([fx, fy, new_w, new_h])
+                placed_indices.append(idx)
+                placed = True
+            elif not fixed_locations: # Only try random if not using fixed locations
+                for _ in range(50): # 50 retries per object
+                    x_range_max = max(bound_x_max - new_w, bound_x_min)
+                    y_range_max = max(bound_y_max - new_h, bound_y_min)
+                    
+                    rand_x = random.randint(bound_x_min, x_range_max)
+                    rand_y = random.randint(bound_y_min, y_range_max)
+                    
+                    current_box = [rand_x, rand_y, new_w, new_h]
+                    collision = False
+                    for pb in placed_boxes:
+                        if DataAugmentor.check_collision(current_box, pb):
+                            collision = True
+                            break
+                    
+                    if not collision:
+                        DataAugmentor.place_object(bg_copy, aug_obj, aug_mask, rand_x, rand_y)
+                        placed_boxes.append(current_box)
+                        used_locations.append((rand_x, rand_y))
+                        placed_indices.append(idx)
+                        placed = True
+                        break
+            
+            if not placed:
+                print(f"DEBUG: Failed to place object {idx} in preview")
+                if not fixed_locations:
+                    # If we are generating new, we just skip it. 
+                    # But index mapping might get tricky if we return lists of unequal length.
+                    # Let's keep used_locations matched to fixed_locations if provided.
+                    pass
+
+        return bg_copy, placed_indices, used_locations
 
     @staticmethod
     def process_file_wrapper(args):
@@ -617,15 +762,7 @@ class DataAugmentor:
                     obj_x2 = obj_x1 + (x2_c - x1_c)
 
                     # Place it
-                    for c in range(3):
-                        bg_slice = bg_copy[y1_c:y2_c, x1_c:x2_c, c]
-                        obj_slice = aug_obj[obj_y1:obj_y2, obj_x1:obj_x2, c]
-                        mask_slice = aug_mask[obj_y1:obj_y2, obj_x1:obj_x2]
-                        
-                        bg_copy[y1_c:y2_c, x1_c:x2_c, c] = (
-                            bg_slice * (1 - mask_slice / 255) +
-                            obj_slice * (mask_slice / 255)
-                        )
+                    DataAugmentor.place_object(bg_copy, aug_obj, aug_mask, rand_x, rand_y)
                     
                     # Transform Coords
                     translation = [rand_x, rand_y]

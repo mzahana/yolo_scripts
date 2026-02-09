@@ -201,6 +201,8 @@ class AugmentationPreviewRequest(BaseModel):
     roi: Optional[List[float]] = None # [x, y, w, h] normalized
     min_width: int = 0
     min_height: int = 0
+    composition_mode: bool = False
+    objects_per_image: int = 3
     
 class AugmentationGenerateRequest(AugmentationPreviewRequest):
     output_path: Optional[str] = None
@@ -844,6 +846,9 @@ class AugmentationSampleRequest(BaseModel):
     dataset_path: str
     class_ids: List[int]
     background_path: str
+    composition_mode: bool = False
+    objects_per_image: int = 3
+    roi: Optional[List[float]] = None
 
 class AugmentationApplyPreviewRequest(BaseModel):
     background_path: str
@@ -856,6 +861,8 @@ class AugmentationApplyPreviewRequest(BaseModel):
     roi: Optional[List[float]] = None
     min_width: int = 0
     min_height: int = 0
+    composition_mode: bool = False
+    objects_per_image: int = 3
 
 @app.get("/api/augmentation/stats")
 def get_augmentation_stats(path: str):
@@ -931,10 +938,13 @@ async def websocket_terminal(websocket: WebSocket):
 @app.post("/api/augmentation/sample")
 def sample_augmentation_object(request: AugmentationSampleRequest):
     try:
-        return DataAugmentationManager.sample_object(
+        return DataAugmentationManager.sample_for_preview(
             request.dataset_path,
             request.class_ids,
-            request.background_path
+            request.background_path,
+            request.composition_mode,
+            request.objects_per_image,
+            request.roi
         )
     except Exception as e:
          raise HTTPException(status_code=500, detail=str(e))
@@ -952,7 +962,8 @@ def apply_augmentation_preview(request: AugmentationApplyPreviewRequest):
             request.region_scale,
             request.roi,
             request.min_width,
-            request.min_height
+            request.min_height,
+            request.composition_mode
         )
     except Exception as e:
          raise HTTPException(status_code=500, detail=str(e))
