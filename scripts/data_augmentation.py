@@ -602,6 +602,12 @@ class DataAugmentor:
         return generated_count
 
     @staticmethod
+    def init_worker(bg_img_shared):
+        global background_img_global
+        background_img_global = bg_img_shared
+
+
+    @staticmethod
     def run_composition_mode(
         images_dir, labels_dir, class_ids, background_img, output_dir,
         total_images, objects_per_image, 
@@ -660,230 +666,119 @@ class DataAugmentor:
         print(f"Found {len(valid_object_candidates)} valid objects. Starting generation...")
 
         # Prepare arguments for each image to be generated
-        tasks = []
-        for i in range(total_images):
-            # Pick random samples for this image
-            # We pick excess to handle failures
-            current_samples = random.sample(valid_object_candidates, min(len(valid_object_candidates), objects_per_image * 5))
-            
-            tasks.append((
-                current_samples, background_img, output_dir, i,
-                objects_per_image, rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
-                region_scale, image_w, image_h, max_region_w, max_region_h, roi, min_width, min_height
-            ))
-
-        # Run in parallel
-        # Note: background_img is passed. On Linux fork, this is efficient.
         generated_count = 0
-        
-        # Use a slightly smaller pool to avoid choking the system? or full cpu_count.
+        tasks_submitted = 0
         num_workers = max(1, cpu_count() - 1)
         
-        with Pool(processes=num_workers) as pool:
-            for result in tqdm(pool.imap_unordered(DataAugmentor.generate_single_composition_item, tasks), total=total_images):
-                generated_count += result
-                if update_progress_callback:
-                    update_progress_callback(generated_count, total_images)
+        print(f"Starting composition generation in batches to ensure {total_images} images...")
+
+        with Pool(processes=num_workers, initializer=DataAugmentor.init_worker, initargs=(background_img,)) as pool:
+            while generated_count < total_images:
+                remaining = total_images - generated_count
+                
+                # Safeguard against infinite loops if something is fundamentally broken
+                if tasks_submitted > total_images * 10:
+                    print(f"CRITICAL ERROR: Too many failures ({tasks_submitted} tasks submitted). Stopping at {generated_count}/{total_images} images.")
+                    break
+
+                batch_tasks = []
+                for _ in range(remaining):
+                    # Pick random samples for this image
+                    # We pick 10x the requested objects to provide plenty of candidates for placement
+                    current_samples = random.sample(valid_object_candidates, min(len(valid_object_candidates), objects_per_image * 10))
+                    
+                    batch_tasks.append((
+                        current_samples, output_dir, tasks_submitted,
+                        objects_per_image, rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
+                        region_scale, image_w, image_h, max_region_w, max_region_h, roi, min_width, min_height
+                    ))
+                    tasks_submitted += 1
+                
+                # Run the current batch in parallel
+                for result in tqdm(pool.imap_unordered(DataAugmentor.generate_single_composition_item, batch_tasks), total=len(batch_tasks), desc=f"Progress: {generated_count}/{total_images}"):
+                    generated_count += result
+                    if update_progress_callback:
+                        update_progress_callback(generated_count, total_images)
 
         return generated_count
 
     @staticmethod
     def generate_single_composition_item(args):
-        (
-            samples, background_img, output_dir, img_idx,
-            objects_per_image, rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
-            region_scale, image_w, image_h, max_region_w, max_region_h, roi, min_width, min_height
-        ) = args
-        
-        # Re-seed random
-        random.seed()
-        np.random.seed()
-
-        bg_h, bg_w = background_img.shape[:2]
-        bg_copy = background_img.copy()
-        
-        placed_boxes = []
-        aug_labels = []
-        placed_count = 0
-        
-        bound_x_min, bound_y_min = 0, 0
-        bound_x_max, bound_y_max = bg_w, bg_h
-        if roi:
-            rx, ry, rw, rh = roi
-            bound_x_min = int(rx * bg_w)
-            bound_y_min = int(ry * bg_h)
-            bound_x_max = int(min((rx + rw) * bg_w, bg_w))
-            bound_y_max = int(min((ry + rh) * bg_h, bg_h))
-
-        for sample in samples:
-            if placed_count >= objects_per_image:
-                break
-                
-            src_img = cv2.imread(sample["image_path"])
-            if src_img is None: continue
-            src_h, src_w = src_img.shape[:2]
+        try:
+            (
+                samples, output_dir, img_idx,
+                objects_per_image, rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
+                region_scale, image_w, image_h, max_region_w, max_region_h, roi, min_width, min_height
+            ) = args
             
-            # Extract
-            parts = sample["label_line"].strip().split()
-            coords = np.array(parts[1:], dtype=float)
-            obj_class_id = int(parts[0])
+            # Access global background image
+            global background_img_global
+            # Verify we have the background
+            if 'background_img_global' not in globals() or background_img_global is None:
+                 # Should not happen if initialized correctly
+                 print("ERROR: Worker missing background image")
+                 return 0
+
+            # Re-seed random
+            random.seed()
+            np.random.seed()
+
+            bg_h, bg_w = background_img_global.shape[:2]
+            bg_copy = background_img_global.copy()
+        
+            placed_boxes = []
+            aug_labels = []
+            placed_count = 0
             
-            obj_roi, mask_roi, w, h, coords_relative = DataAugmentor.extract_object(
-                src_img, coords, src_w, src_h, min_width, min_height
-            )
-            if obj_roi is None: continue
+            bound_x_min, bound_y_min = 0, 0
+            bound_x_max, bound_y_max = bg_w, bg_h
+            if roi:
+                rx, ry, rw, rh = roi
+                bound_x_min = int(rx * bg_w)
+                bound_y_min = int(ry * bg_h)
+                bound_x_max = int(min((rx + rw) * bg_w, bg_w))
+                bound_y_max = int(min((ry + rh) * bg_h, bg_h))
 
-            # Augment
-            roi_w = bound_x_max - bound_x_min
-            roi_h = bound_y_max - bound_y_min
-            curr_max_region_w = int(region_scale * roi_w)
-            curr_max_region_h = int(region_scale * roi_h)
-
-            aug_obj, aug_mask, new_w, new_h, rotation_matrix, scale_factor = DataAugmentor.apply_augmentations(
-                obj_roi, mask_roi, w, h, 
-                rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
-                curr_max_region_w, curr_max_region_h
-            )
-            if aug_obj is None: continue
-
-            # Place
-            placed = False
-            for _ in range(50):
-                x_range_max = max(bound_x_max - new_w, bound_x_min)
-                y_range_max = max(bound_y_max - new_h, bound_y_min)
-                
-                rand_x = random.randint(bound_x_min, x_range_max)
-                rand_y = random.randint(bound_y_min, y_range_max)
-                
-                current_box = [rand_x, rand_y, new_w, new_h]
-                collision = False
-                for pb in placed_boxes:
-                    if DataAugmentor.check_collision(current_box, pb):
-                        collision = True
-                        break
-                
-                if not collision:
-                    DataAugmentor.place_object(bg_copy, aug_obj, aug_mask, rand_x, rand_y)
-                    placed_boxes.append(current_box)
-                    placed = True
-                    placed_count += 1
-                    
-                    # Transform coords for label
-                    translation = [rand_x, rand_y]
-                    new_coords = DataAugmentor.transform_coordinates(coords_relative, rotation_matrix, scale_factor, translation)
-                    new_coords[:, 0] /= bg_w
-                    new_coords[:, 1] /= bg_h
-                    new_coords = np.clip(new_coords, 0.0, 1.0)
-                    new_coords = new_coords.reshape(-1)
-                    aug_labels.append(f"{obj_class_id} {' '.join(map(str, new_coords))}")
-                    
+            for sample in samples:
+                if placed_count >= objects_per_image:
                     break
-
-        if placed_count > 0:
-            aug_image_name = f"aug_comp_{img_idx}.jpg"
-            aug_label_name = f"aug_comp_{img_idx}.txt"
-            
-            cv2.imwrite(os.path.join(output_dir, 'images', aug_image_name), bg_copy)
-            with open(os.path.join(output_dir, 'labels', aug_label_name), 'w') as lf_aug:
-                for label in aug_labels:
-                    lf_aug.write(f"{label}\n")
-            return 1
-        
-        # Scan all label files
-        label_files = [f for f in os.listdir(labels_dir) if f.endswith('.txt')]
-        for lf in label_files:
-            try:
-                with open(os.path.join(labels_dir, lf), 'r') as f:
-                    lines = f.readlines()
                     
-                # Find corresponding image
-                base_name = os.path.splitext(lf)[0]
-                found_image = None
-                for ext in ['.jpg', '.jpeg', '.png', '.bmp']:
-                    p = os.path.join(images_dir, base_name + ext)
-                    if os.path.exists(p):
-                        found_image = p
-                        break
+                src_img = cv2.imread(sample["image_path"])
+                if src_img is None: continue
+                src_h, src_w = src_img.shape[:2]
                 
-                if not found_image: continue
+                # Extract
+                parts = sample["label_line"].strip().split()
+                coords = np.array(parts[1:], dtype=float)
+                obj_class_id = int(parts[0])
+                
+                obj_roi, mask_roi, w, h, coords_relative = DataAugmentor.extract_object(
+                    src_img, coords, src_w, src_h, min_width, min_height
+                )
+                if obj_roi is None: continue
 
-                for line in lines:
-                    parts = line.strip().split()
-                    if not parts: continue
-                    cid = int(parts[0])
-                    if cid in class_ids:
-                        coords = np.array(parts[1:], dtype=float)
-                        all_valid_objects.append((found_image, cid, coords))
-            except: continue
+                # Augment
+                roi_w = bound_x_max - bound_x_min
+                roi_h = bound_y_max - bound_y_min
+                curr_max_region_w = int(region_scale * roi_w)
+                curr_max_region_h = int(region_scale * roi_h)
 
-        if not all_valid_objects:
-            print("No valid objects found for composition.")
-            return 0
-            
-        generated_count = 0
-        
-        for img_idx in range(total_images):
-            bg_copy = background_img.copy()
-            bg_h, bg_w = bg_copy.shape[:2]
-            
-            aug_labels_for_this_image = []
-            placed_boxes = [] # List of [x, y, w, h] in pixels
-            
-            # Try to place M objects
-            objects_placed = 0
-            retries = 0
-            max_retries = 200 # increased from 50 to allow finding space
-            
-            while objects_placed < objects_per_image and retries < max_retries:
-                # Pick random object
-                try:
-                    src_img_path, obj_cid, obj_coords = random.choice(all_valid_objects)
-                    
-                    src_img = cv2.imread(src_img_path)
-                    if src_img is None: 
-                        retries += 1
-                        continue
-                    
-                    src_h, src_w = src_img.shape[:2]
-                    
-                    # Extract
-                    obj_roi, mask_roi, w, h, coords_relative = DataAugmentor.extract_object(
-                        src_img, obj_coords, src_w, src_h, min_width, min_height
-                    )
-                    if obj_roi is None:
-                        retries += 1
-                        continue
+                aug_obj, aug_mask, new_w, new_h, rotation_matrix, scale_factor = DataAugmentor.apply_augmentations(
+                    obj_roi, mask_roi, w, h, 
+                    rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
+                    curr_max_region_w, curr_max_region_h
+                )
+                if aug_obj is None: continue
 
-                    # Augment
-                    aug_obj, aug_mask, new_w, new_h, rotation_matrix, scale_factor = DataAugmentor.apply_augmentations(
-                        obj_roi, mask_roi, w, h, rotation_range, blur_range, 
-                        scaling_range, contrast_range, brightness_range, max_region_w, max_region_h
-                    )
-                    if aug_obj is None:
-                        retries += 1
-                        continue
-
-                    # Define placement bounds based on ROI
-                    bound_x_min, bound_y_min = 0, 0
-                    bound_x_max, bound_y_max = bg_w, bg_h
-                    
-                    if roi:
-                        # roi is [x, y, w, h] normalized (0-1)
-                        rx, ry, rw, rh = roi
-                        bound_x_min = int(rx * bg_w)
-                        bound_y_min = int(ry * bg_h)
-                        bound_x_max = int(min((rx + rw) * bg_w, bg_w))
-                        bound_y_max = int(min((ry + rh) * bg_h, bg_h))
-
-                    # Ensure object fits in bounds
+                # Place
+                placed = False
+                for _ in range(50):
                     x_range_max = max(bound_x_max - new_w, bound_x_min)
                     y_range_max = max(bound_y_max - new_h, bound_y_min)
                     
-                    # Random Position within bounds
                     rand_x = random.randint(bound_x_min, x_range_max)
                     rand_y = random.randint(bound_y_min, y_range_max)
                     
-                    # Collision Check
                     current_box = [rand_x, rand_y, new_w, new_h]
                     collision = False
                     for pb in placed_boxes:
@@ -891,68 +786,39 @@ class DataAugmentor:
                             collision = True
                             break
                     
-                    if collision:
-                        retries += 1
-                        continue
-                    
-                    
-                    # Safe Slicing: Ensure we don't exceed image bounds or object bounds
-                    y1, y2 = rand_y, rand_y + new_h
-                    x1, x2 = rand_x, rand_x + new_w
-                    
-                    # Clip coordinates to background
-                    y1_c = max(0, y1)
-                    y2_c = min(bg_h, y2)
-                    x1_c = max(0, x1)
-                    x2_c = min(bg_w, x2)
-                    
-                    # If heavily clipped (invisible), skip
-                    if y2_c <= y1_c or x2_c <= x1_c:
-                         retries += 1
-                         continue
+                    if not collision:
+                        DataAugmentor.place_object(bg_copy, aug_obj, aug_mask, rand_x, rand_y)
+                        placed_boxes.append(current_box)
+                        placed = True
+                        placed_count += 1
+                        
+                        # Transform coords for label
+                        translation = [rand_x, rand_y]
+                        new_coords = DataAugmentor.transform_coordinates(coords_relative, rotation_matrix, scale_factor, translation)
+                        new_coords[:, 0] /= bg_w
+                        new_coords[:, 1] /= bg_h
+                        new_coords = np.clip(new_coords, 0.0, 1.0)
+                        new_coords = new_coords.reshape(-1)
+                        aug_labels.append(f"{obj_class_id} {' '.join(map(str, new_coords))}")
+                        
+                        break
 
-                    # Calculate corresponding offsets in the object mask
-                    obj_y1 = y1_c - y1
-                    obj_y2 = obj_y1 + (y2_c - y1_c)
-                    obj_x1 = x1_c - x1
-                    obj_x2 = obj_x1 + (x2_c - x1_c)
-
-                    # Place it
-                    DataAugmentor.place_object(bg_copy, aug_obj, aug_mask, rand_x, rand_y)
-                    
-                    # Transform Coords
-                    translation = [rand_x, rand_y]
-                    new_coords = DataAugmentor.transform_coordinates(coords_relative, rotation_matrix, scale_factor, translation)
-                    new_coords[:, 0] /= bg_w
-                    new_coords[:, 1] /= bg_h
-                    new_coords = np.clip(new_coords, 0.0, 1.0)
-                    new_coords = new_coords.reshape(-1)
-                    
-                    aug_labels_for_this_image.append(f"{obj_cid} {' '.join(map(str, new_coords))}")
-                    placed_boxes.append(current_box)
-                    objects_placed += 1
-                except Exception as e:
-                    import traceback
-                    print(f"DEBUG: Error processing object: {e}")
-                    traceback.print_exc()
-                    retries += 1
-                    continue
-            
-            # Save Image & Label
-            if aug_labels_for_this_image:
-                out_name = f"comp_img_{img_idx}.jpg"
-                out_label = f"comp_img_{img_idx}.txt"
+            if placed_count > 0:
+                aug_image_name = f"aug_comp_{img_idx}.jpg"
+                aug_label_name = f"aug_comp_{img_idx}.txt"
                 
-                cv2.imwrite(os.path.join(output_dir, 'images', out_name), bg_copy)
-                with open(os.path.join(output_dir, 'labels', out_label), 'w') as f:
-                    for l in aug_labels_for_this_image:
-                        f.write(l + "\n")
-                
-                generated_count += 1
-                if update_progress_callback:
-                    update_progress_callback(generated_count, total_images)
-
-        return generated_count
+                cv2.imwrite(os.path.join(output_dir, 'images', aug_image_name), bg_copy)
+                with open(os.path.join(output_dir, 'labels', aug_label_name), 'w') as lf_aug:
+                    for label in aug_labels:
+                        lf_aug.write(f"{label}\n")
+                return 1
+            return 0
+        except Exception as e:
+            # Catch-all to prevent worker death from hanging the pool
+            import traceback
+            print(f"CRITICAL WORKER ERROR in generate_single_composition_item (img_idx={args[2] if len(args)>2 else '?'}) : {e}")
+            traceback.print_exc()
+            return 0
 
     @staticmethod
     def run(
