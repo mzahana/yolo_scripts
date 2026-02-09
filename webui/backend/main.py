@@ -854,6 +854,8 @@ class AugmentationApplyPreviewRequest(BaseModel):
     brightness_range: Optional[List[int]] = None
     region_scale: float = 0.8
     roi: Optional[List[float]] = None
+    min_width: int = 0
+    min_height: int = 0
 
 @app.get("/api/augmentation/stats")
 def get_augmentation_stats(path: str):
