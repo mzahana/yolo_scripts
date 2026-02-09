@@ -19,6 +19,9 @@ const TrainingView = ({ datasetPath, onBrowse }) => {
     const [useCustomModel, setUseCustomModel] = useState(false);
     const [customModelPath, setCustomModelPath] = useState('');
     const [selectedDevices, setSelectedDevices] = useState(['']); // '' = Auto/Default
+    const [modelExtension, setModelExtension] = useState('.pt'); // '.pt' or '.yaml'
+    const [loadWeights, setLoadWeights] = useState('');
+    const [useLoadWeights, setUseLoadWeights] = useState(false);
     const [localDatasetPath, setLocalDatasetPath] = useState(datasetPath || '');
     const [epochs, setEpochs] = useState(100);
     const [batch, setBatch] = useState(16);
@@ -78,15 +81,15 @@ const TrainingView = ({ datasetPath, onBrowse }) => {
             const isValidBase = models[selectedFramework].includes(currentBase);
             const baseToUse = isValidBase ? currentBase : models[selectedFramework][0];
 
-            let suffix = '.pt';
-            if (task === 'segment') suffix = '-seg.pt';
-            else if (task === 'classify') suffix = '-cls.pt';
-            else if (task === 'obb') suffix = '-obb.pt';
-            else if (task === 'pose') suffix = '-pose.pt';
+            let suffix = modelExtension;
+            if (task === 'segment') suffix = `-seg${modelExtension}`;
+            else if (task === 'classify') suffix = `-cls${modelExtension}`;
+            else if (task === 'obb') suffix = `-obb${modelExtension}`;
+            else if (task === 'pose') suffix = `-pose${modelExtension}`;
 
             setSelectedModel(`${baseToUse}${suffix}`);
         }
-    }, [task, selectedFramework, models, mode]);
+    }, [task, selectedFramework, models, mode, modelExtension]);
 
     // Poll status (SHARED polling loop logic but separate endpoints)
     useEffect(() => {
@@ -178,7 +181,8 @@ const TrainingView = ({ datasetPath, onBrowse }) => {
             project: localDatasetPath ? `${localDatasetPath}/runs/${task}` : `runs/${task}`,
             name: runName,
             patience: parseInt(patience),
-            task: task
+            task: task,
+            load_weights: useLoadWeights ? loadWeights : null
         };
 
         if (advancedParams.trim()) {
@@ -291,32 +295,65 @@ const TrainingView = ({ datasetPath, onBrowse }) => {
                                             <input type="radio" checked={!useCustomModel} onChange={() => setUseCustomModel(false)} /> Ultralytics
                                         </label>
                                         <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                                            <input type="radio" checked={useCustomModel} onChange={() => setUseCustomModel(true)} /> Custom .pt
+                                            <input type="radio" checked={useCustomModel} onChange={() => setUseCustomModel(true)} /> Custom (.pt or .yaml)
                                         </label>
                                     </div>
                                     {!useCustomModel ? (
-                                        <div style={{ display: 'flex', gap: '10px' }}>
-                                            <select className="input" value={selectedFramework} onChange={e => { setSelectedFramework(e.target.value); if (models[e.target.value]) setSelectedModel(models[e.target.value][0]); }} style={{ width: '120px' }}>
-                                                {Object.keys(models).map(k => <option key={k} value={k}>{k}</option>)}
-                                            </select>
-                                            <select className="input" value={selectedModel} onChange={e => setSelectedModel(e.target.value)} style={{ flex: 1 }}>
-                                                {models[selectedFramework]?.map(m => {
-                                                    let suffix = '.pt';
-                                                    let display = m;
-                                                    if (task === 'segment') { display = `${m}-seg`; suffix = '-seg.pt'; }
-                                                    else if (task === 'classify') { display = `${m}-cls`; suffix = '-cls.pt'; }
-                                                    else if (task === 'obb') { display = `${m}-obb`; suffix = '-obb.pt'; }
-                                                    else if (task === 'pose') { display = `${m}-pose`; suffix = '-pose.pt'; }
-                                                    return <option key={m} value={`${m}${suffix}`}>{display}</option>
-                                                })}
-                                            </select>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                            <div style={{ display: 'flex', gap: '10px' }}>
+                                                <select className="input" value={selectedFramework} onChange={e => { setSelectedFramework(e.target.value); if (models[e.target.value]) setSelectedModel(models[e.target.value][0]); }} style={{ width: '120px' }}>
+                                                    {Object.keys(models).map(k => <option key={k} value={k}>{k}</option>)}
+                                                </select>
+                                                <select className="input" value={selectedModel} onChange={e => setSelectedModel(e.target.value)} style={{ flex: 1 }}>
+                                                    {models[selectedFramework]?.map(m => {
+                                                        let suffix = modelExtension;
+                                                        let display = m;
+                                                        if (task === 'segment') { display = `${m}-seg`; suffix = `-seg${modelExtension}`; }
+                                                        else if (task === 'classify') { display = `${m}-cls`; suffix = `-cls${modelExtension}`; }
+                                                        else if (task === 'obb') { display = `${m}-obb`; suffix = `-obb${modelExtension}`; }
+                                                        else if (task === 'pose') { display = `${m}-pose`; suffix = `-pose${modelExtension}`; }
+                                                        return <option key={m} value={`${m}${suffix}`}>{display}</option>
+                                                    })}
+                                                </select>
+                                            </div>
+                                            <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+                                                <span style={{ fontSize: '0.85rem', opacity: 0.8 }}>Start from:</span>
+                                                <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.85rem' }}>
+                                                    <input type="radio" checked={modelExtension === '.pt'} onChange={() => setModelExtension('.pt')} /> Pretrained (.pt)
+                                                </label>
+                                                <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.85rem' }}>
+                                                    <input type="radio" checked={modelExtension === '.yaml'} onChange={() => setModelExtension('.yaml')} /> Architecture (.yaml)
+                                                </label>
+                                            </div>
                                         </div>
                                     ) : (
                                         <div style={{ display: 'flex', gap: '10px' }}>
-                                            <input className="input" style={{ flex: 1 }} value={customModelPath} onChange={e => setCustomModelPath(e.target.value)} placeholder="/path/to/custom.pt" />
+                                            <input className="input" style={{ flex: 1 }} value={customModelPath} onChange={e => setCustomModelPath(e.target.value)} placeholder="/path/to/model.pt or .yaml" />
                                             <button className="btn btn-primary" onClick={() => onBrowse('model', 'file', setCustomModelPath)}>Browse</button>
                                         </div>
                                     )}
+                                </div>
+
+                                <div style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '10px' }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '5px' }}>
+                                        <input type="checkbox" checked={useLoadWeights} onChange={e => setUseLoadWeights(e.target.checked)} />
+                                        <span style={{ fontWeight: 'bold' }}>Transfer Weights (.load)</span>
+                                    </label>
+                                    {useLoadWeights && (
+                                        <div style={{ display: 'flex', gap: '10px', marginTop: '5px' }}>
+                                            <input
+                                                className="input"
+                                                style={{ flex: 1 }}
+                                                value={loadWeights}
+                                                onChange={e => setLoadWeights(e.target.value)}
+                                                placeholder="/path/to/pretrained.pt"
+                                            />
+                                            <button className="btn btn-primary" onClick={() => onBrowse('model', 'file', setLoadWeights)}>Browse</button>
+                                        </div>
+                                    )}
+                                    <small style={{ opacity: 0.6, display: 'block', marginTop: '5px' }}>
+                                        Useful for `YOLO(arch.yaml).load(weights.pt)` patterns.
+                                    </small>
                                 </div>
                             </div>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>

@@ -865,8 +865,8 @@ function App() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                         <h3 style={{ margin: 0 }}>
                             {browserTarget === 'dataset' && 'Select Dataset Folder'}
-                            {browserTarget === 'model' && 'Select YOLO Model File'}
-                            {browserTarget === 'sam_model' && 'Select SAM Model File (.pt)'}
+                            {browserTarget === 'model' && 'Select YOLO Model File (.pt or .yaml)'}
+                            {browserTarget === 'sam_model' && 'Select SAM Model (.pt only)'}
                             {browserTarget === 'merge_source' && 'Select Source Dataset'}
                             {browserTarget === 'merge_output' && 'Select Output Directory'}
                             {browserTarget === 'extract_source' && 'Select Labeled Dataset'}

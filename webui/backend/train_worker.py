@@ -23,19 +23,28 @@ def run_training(config):
 
         # Load model (pretrained or custom)
         model_name = config.get("model", "yolov8n.pt")
-        # If it's a path to a file that exists, use it. Otherwise assume it's a model name downloaded by ultralytics
-        print(f"Loading using model: {model_name}")
+        load_weights = config.get("load_weights") # For YOLO(arch.yaml).load(weights.pt)
+
+        if model_name.endswith('.yaml'):
+             print(f"Building new model from architecture: {model_name}")
+        else:
+             print(f"Loading pretrained model: {model_name}")
+             
         model = YOLO(model_name)
+        
+        if load_weights:
+             print(f"Transferring weights from: {load_weights}")
+             model.load(load_weights)
         
         # Verify model path if possible
         if Path(model_name).exists():
-             print(f"Model file confirm at: {Path(model_name).absolute()}")
-        else:
-             print(f"Model '{model_name}' (pretrained) will be downloaded to: {os.getcwd()}")
+             print(f"Model file confirmed at: {Path(model_name).absolute()}")
+        elif not model_name.endswith('.yaml'):
+             print(f"Model '{model_name}' (pretrained) will be downloaded by Ultralytics to: {os.getcwd()}")
 
         # Prepare arguments
         # Filter out arguments that are not for training or handled separately
-        train_args = {k: v for k, v in config.items() if k not in ["model", "task", "mode"]}
+        train_args = {k: v for k, v in config.items() if k not in ["model", "task", "mode", "load_weights"]}
         
         # Ensure project and name are set if not provided, to keep results organized
         if "project" not in train_args:

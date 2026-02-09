@@ -3261,6 +3261,7 @@ def sam_predict(request: SAMPredictRequest):
 
 class TrainingConfig(BaseModel):
     model: str = "yolov8n.pt"
+    load_weights: Optional[str] = None
     data: str
     epochs: int = 100
     batch: Union[int, float] = 16 # Supports int or float (though usually int) or -1
