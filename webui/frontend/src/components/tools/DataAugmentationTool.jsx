@@ -12,6 +12,38 @@ const AUGMENTATION_TYPES = [
     { id: 'brightness', label: 'Brightness', icon: '🔆', desc: 'Adjust brightness offset' },
 ];
 
+const ResultsSummary = ({ results }) => {
+    if (!results) return null;
+    const { success, skip_size, skip_no_image, skip_load_fail, skip_fail_aug, estimated_target } = results;
+
+    const items = [
+        { label: 'Successfully Generated', value: success, color: 'var(--accent)', icon: '✅' },
+        { label: 'Skipped (Too Small)', value: skip_size, color: '#ff9800', icon: '📏' },
+        { label: 'Skipped (Missing Image)', value: skip_no_image, color: '#f44336', icon: '🖼️' },
+        { label: 'Skipped (Load Fail)', value: skip_load_fail, color: '#f44336', icon: '❌' },
+        { label: 'Skipped (Augment Fail)', value: skip_fail_aug, color: '#ffeb3b', icon: '⚠️' },
+    ];
+
+    return (
+        <div className="glass-panel" style={{ padding: '15px', marginTop: '20px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--accent)' }}>
+            <h4 style={{ margin: '0 0 15px 0', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '10px' }}>
+                Augmentation Results
+            </h4>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px' }}>
+                {items.filter(i => i.value > 0 || i.label === 'Successfully Generated').map(item => (
+                    <div key={item.label} style={{ background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '8px' }}>
+                        <div style={{ fontSize: '0.75rem', opacity: 0.6, marginBottom: '5px' }}>{item.icon} {item.label}</div>
+                        <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: item.color }}>{item.value?.toLocaleString()}</div>
+                    </div>
+                ))}
+            </div>
+            <div style={{ marginTop: '15px', fontSize: '0.85rem', opacity: 0.5, textAlign: 'right' }}>
+                Target: {estimated_target?.toLocaleString()}
+            </div>
+        </div>
+    );
+};
+
 const DataAugmentationTool = ({
     datasetPath,
     setDatasetPath,
@@ -787,7 +819,11 @@ const DataAugmentationTool = ({
                         )
                     }
 
-                    <div style={{ marginTop: 'auto', paddingTop: '30px', display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid rgba(255,255,255,0.05)', flexDirection: 'column', gap: '10px' }}>
+                    <div style={{ marginTop: 'auto', paddingTop: '10px', display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid rgba(255,255,255,0.05)', flexDirection: 'column', gap: '15px' }}>
+                        {!isTaskRunning && taskProgress?.result && (
+                            <ResultsSummary results={taskProgress.result} />
+                        )}
+
                         {isTaskRunning ? (
                             <div style={{ width: '100%' }}>
                                 <div style={{ fontSize: '0.9rem', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
@@ -798,7 +834,7 @@ const DataAugmentationTool = ({
                             </div>
                         ) : (
                             <button className="btn-primary-large" onClick={handleGenerate} disabled={pipeline.length === 0} style={{ width: 'auto', padding: '14px 50px', fontSize: '1.1rem', alignSelf: 'flex-end' }}>
-                                🚀 Run Augmentation Task
+                                🚀 {taskProgress?.result ? 'Run Another Task' : 'Run Augmentation Task'}
                             </button>
                         )}
                     </div>

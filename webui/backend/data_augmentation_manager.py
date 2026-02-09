@@ -296,7 +296,7 @@ class DataAugmentationManager:
                 shutil.copy(src_yaml, os.path.join(output_path, 'data.yaml'))
             
             roi_tuple = tuple(roi) if roi and len(roi) == 4 else None
-            count = DataAugmentor.run(
+            results = DataAugmentor.run(
                 image_dir=dataset_path,
                 class_ids=class_ids,
                 background_img_path=background_path,
@@ -317,9 +317,18 @@ class DataAugmentationManager:
                 min_width=min_width,
                 min_height=min_height
             )
+            
+            # results is now a dict
+            count = results.get("success", 0)
+            skips = results.get("skip_size", 0)
+            
             progress_tracker["status"] = "idle"
-            progress_tracker["result"] = {"count": count, "output_path": output_path}
-            progress_tracker["message"] = f"Successfully generated {count} objects."
+            progress_tracker["result"] = results # Full dict for UI
+            
+            msg = f"Successfully generated {count} objects."
+            if skips > 0:
+                msg += f" {skips} objects were skipped (too small)."
+            progress_tracker["message"] = msg
         except Exception as e:
             progress_tracker["status"] = "error"
             progress_tracker["message"] = str(e)

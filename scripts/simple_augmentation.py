@@ -7,6 +7,7 @@ import yaml
 from pathlib import Path
 from tqdm import tqdm
 import shutil
+from multiprocessing import Pool, cpu_count
 
 class SimpleAugmentor:
     def __init__(self):
@@ -306,90 +307,34 @@ class SimpleAugmentor:
             
         return info
 
-    def process_dataset(self, dataset_path, output_name, multiplier, config, selected_splits=None, progress_callback=None):
-        image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
+    @staticmethod
+    def process_image_item(args):
+        """
+        Process a single image item for parallel execution.
+        args: (img_path, label_path, multiplier, config, output_dir, dataset_path)
+        """
+        img_path, label_path, multiplier, config, output_dir, dataset_path = args
+        augmentor = SimpleAugmentor()
         
-        parent_dir = os.path.dirname(dataset_path.rstrip(os.sep))
-        output_dir = os.path.join(parent_dir, output_name)
-        
-        # Collect images based on structure and selection
-        images_to_process = []
-        
-        # Scan first to know structure (or rely on what UI passed? safer to re-scan or just walk relevant paths)
-        # If selected_splits is provided, we assume split structure.
-        
-        if selected_splits:
-            # Split structure
-            for split in selected_splits:
-                # Try standard YOLO path: split/images
-                split_img_dir = os.path.join(dataset_path, split, 'images')
-                if not os.path.isdir(split_img_dir):
-                    split_img_dir = os.path.join(dataset_path, split) # fallback
-                
-                if os.path.isdir(split_img_dir):
-                    for root, dirs, files in os.walk(split_img_dir):
-                        for file in files:
-                            if os.path.splitext(file)[1].lower() in image_extensions:
-                                images_to_process.append(os.path.join(root, file))
-        else:
-            # Flat or auto-detect all
-            # If flat, just walk everything (excluding output dir if it ends up inside, but we write to sibling)
-            for root, dirs, files in os.walk(dataset_path):
-                # Avoid recursing into the output directory if it happens to be created inside (though we aim for sibling)
-                if os.path.abspath(output_dir).startswith(os.path.abspath(root)):
-                    continue
-                    
-                for file in files:
-                    if os.path.splitext(file)[1].lower() in image_extensions:
-                        images_to_process.append(os.path.join(root, file))
-                    
-        total_ops = len(images_to_process) * multiplier
-        current_op = 0
-        if progress_callback: progress_callback(0, total_ops, f"Starting... Found {len(images_to_process)} images.")
-        
-        for img_path in images_to_process:
-            # Find label path logic (needs to be robust for splits)
-            # Standard YOLO split: dataset/train/images/img.jpg -> dataset/train/labels/img.txt
-            # Flat: dataset/images/img.jpg -> dataset/labels/img.txt
-            
-            p = Path(img_path)
-            parts = list(p.parts)
-            label_path = None
-            
-            # 1. Swap images -> labels
-            try:
-                # Find the right-most 'images' occurrence to swap
-                if 'images' in parts:
-                    # rindex equivalent
-                    idx = len(parts) - 1 - parts[::-1].index('images')
-                    parts[idx] = 'labels'
-                    pot = Path(*parts).with_suffix('.txt')
-                    if pot.exists(): label_path = str(pot)
-            except: pass
-            
-            # 2. Same dir
-            if not label_path:
-                pot = p.with_suffix('.txt')
-                if pot.exists(): label_path = str(pot)
-            
+        try:
             # Load Image
             image = cv2.imread(img_path)
-            if image is None: continue
+            if image is None: return 0
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             
+            generated_count = 0
             # Process N times
             for i in range(multiplier):
                 if not label_path:
-                    pipeline = self.get_pipeline(config, has_bboxes=False, has_keypoints=False)
+                    pipeline = augmentor.get_pipeline(config, has_bboxes=False, has_keypoints=False)
                     res = pipeline(image=image)
                     aug_img = res['image']
                     final_bboxes, final_polygons = [], []
                     final_bbox_classes, final_poly_classes = [], []
                 else:
-                    aug_img, final_bboxes, final_bbox_classes, final_polygons, final_poly_classes = self.apply_augmentation(image, label_path, config)
+                    aug_img, final_bboxes, final_bbox_classes, final_polygons, final_poly_classes = augmentor.apply_augmentation(image, label_path, config)
                 
                 # Determine relative path for output to maintain structure
-                # If split: dataset/train/images/img.jpg -> output/train/images/img_aug_0.jpg
                 rel_path = os.path.relpath(img_path, dataset_path)
                 out_img_path = os.path.join(output_dir, rel_path)
                 
@@ -408,40 +353,104 @@ class SimpleAugmentor:
                     pts_str = " ".join([f"{pt[0]:.6f} {pt[1]:.6f}" for pt in p])
                     final_lines.append(f"{c} {pts_str}")
                 
-                # Logic to determine output label path
-                # mirroring input structure
                 final_label_path = None
-                
-                # If we found a label path originally, we try to mirror that relative structure?
-                # Or just assume standard YOLO structure in output?
-                # Simplest: apply same relative path transformation to label path if it exists
                 if label_path:
-                    l_rel = os.path.relpath(label_path, dataset_path)
-                    l_base = os.path.join(output_dir, l_rel)
-                    ln, le = os.path.splitext(l_base)
-                    final_label_path = f"{ln}{suffix}{le}"
-                else:
+                    # Check if label_path is actually a file (might be dummy from backend)
+                    if os.path.exists(label_path):
+                        l_rel = os.path.relpath(label_path, dataset_path)
+                        l_base = os.path.join(output_dir, l_rel)
+                        ln, le = os.path.splitext(l_base)
+                        final_label_path = f"{ln}{suffix}{le}"
+                
+                if not final_label_path:
                      # Infer from output image path
-                     if 'images' in final_img_path.split(os.sep):
-                         p_parts = list(Path(final_img_path).parts)
-                         try:
+                     p_parts = list(Path(final_img_path).parts)
+                     try:
+                         if 'images' in p_parts:
                              idx = len(p_parts) - 1 - p_parts[::-1].index('images')
                              p_parts[idx] = 'labels'
                              final_label_path = str(Path(*p_parts).with_suffix('.txt'))
-                         except: pass
+                         else:
+                             # Same dir
+                             final_label_path = str(Path(final_img_path).with_suffix('.txt'))
+                     except: pass
 
                 if final_label_path:
                     os.makedirs(os.path.dirname(final_label_path), exist_ok=True)
-                    if final_lines or label_path: # Write if we have content OR if original existed (empty file)
+                    if final_lines: 
                          with open(final_label_path, 'w') as f:
                             f.write('\n'.join(final_lines))
+                    elif label_path and os.path.exists(label_path):
+                         # Original existed but augmentation resulted in no objects, still create empty file
+                         open(final_label_path, 'w').close()
 
-                current_op += 1
-                if progress_callback and current_op % 10 == 0:
+                generated_count += 1
+            return generated_count
+        except Exception as e:
+            print(f"Error processing {img_path}: {e}")
+            return 0
+
+    def process_dataset(self, dataset_path, output_name, multiplier, config, selected_splits=None, progress_callback=None):
+        image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
+        
+        parent_dir = os.path.dirname(dataset_path.rstrip(os.sep))
+        output_dir = os.path.join(parent_dir, output_name)
+        
+        images_to_process = []
+        
+        if selected_splits:
+            for split in selected_splits:
+                split_img_dir = os.path.join(dataset_path, split, 'images')
+                if not os.path.isdir(split_img_dir):
+                    split_img_dir = os.path.join(dataset_path, split) 
+                
+                if os.path.isdir(split_img_dir):
+                    for root, dirs, files in os.walk(split_img_dir):
+                        for file in files:
+                            if os.path.splitext(file)[1].lower() in image_extensions:
+                                images_to_process.append(os.path.join(root, file))
+        else:
+            for root, dirs, files in os.walk(dataset_path):
+                if os.path.abspath(output_dir).startswith(os.path.abspath(root)):
+                    continue
+                for file in files:
+                    if os.path.splitext(file)[1].lower() in image_extensions:
+                        images_to_process.append(os.path.join(root, file))
+        
+        # Prepare task arguments
+        tasks = []
+        for img_path in images_to_process:
+            p = Path(img_path)
+            parts = list(p.parts)
+            label_path = None
+            try:
+                if 'images' in parts:
+                    idx = len(parts) - 1 - parts[::-1].index('images')
+                    parts[idx] = 'labels'
+                    pot = Path(*parts).with_suffix('.txt')
+                    if pot.exists(): label_path = str(pot)
+            except: pass
+            
+            if not label_path:
+                pot = p.with_suffix('.txt')
+                if pot.exists(): label_path = str(pot)
+            
+            tasks.append((img_path, label_path, multiplier, config, output_dir, dataset_path))
+
+        total_ops = len(tasks) * multiplier
+        current_op = 0
+        if progress_callback: progress_callback(0, total_ops, f"Starting parallel processing of {len(tasks)} images...")
+        
+        num_workers = max(1, cpu_count() - 1)
+        num_workers = min(num_workers, len(tasks)) if tasks else 1
+
+        with Pool(processes=num_workers) as pool:
+            for result in tqdm(pool.imap_unordered(SimpleAugmentor.process_image_item, tasks), total=len(tasks), desc="Augmenting"):
+                current_op += result
+                if progress_callback:
                      progress_callback(current_op, total_ops, f"Processed {current_op}/{total_ops}")
 
-        # Copy data.yaml if exists and update it?
-        # For now just copy it.
+        # Copy data.yaml
         src_yaml = os.path.join(dataset_path, 'data.yaml')
         if os.path.exists(src_yaml):
              try:

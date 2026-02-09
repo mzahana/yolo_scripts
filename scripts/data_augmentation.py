@@ -787,7 +787,14 @@ class DataAugmentor:
                     if update_progress_callback:
                         update_progress_callback(generated_count, total_images)
 
-        return generated_count
+        return {
+            "success": generated_count,
+            "estimated_target": total_images,
+            "skip_size": 0,
+            "skip_no_image": 0,
+            "skip_load_fail": 0,
+            "skip_fail_aug": 0
+        }
 
     @staticmethod
     def generate_single_composition_item(args):
@@ -1069,7 +1076,8 @@ class DataAugmentor:
         print(f" - Skipped (Load Fail): {aggregate_stats['skip_load_fail']}")
         print(f" - Skipped (Augment Fail): {aggregate_stats['skip_fail_aug']}")
 
-        return aggregate_stats["success"]
+        aggregate_stats["estimated_target"] = estimated_total_output
+        return aggregate_stats
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Multi-Class Instance Segmentation Data Augmentation')
