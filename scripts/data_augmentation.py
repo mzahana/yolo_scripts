@@ -556,50 +556,137 @@ class DataAugmentor:
         label_file, images_dir, labels_dir, background_img, output_dir, class_ids, 
         num_augmentations, rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
         region_scale, image_w, image_h, max_region_w, max_region_h, augment_together,
-        min_width=0, min_height=0
+        min_width=0, min_height=0, roi=None
     ):
+        stats = {
+            "success": 0,
+            "skip_size": 0,
+            "skip_no_image": 0,
+            "skip_load_fail": 0,
+            "skip_fail_aug": 0
+        }
+        
         label_path = os.path.join(labels_dir, label_file)
-        with open(label_path, 'r') as lf:
-            lines = lf.readlines()
+        try:
+            with open(label_path, 'r') as lf:
+                lines = lf.readlines()
+        except:
+            return stats
 
         valid_objects = []
         for line in lines:
             parts = line.strip().split()
             if not parts: continue
-            
-            obj_class_id = int(parts[0])
-            if obj_class_id not in class_ids:
-                continue
-            
-            coords = np.array(parts[1:], dtype=float)
-            valid_objects.append((obj_class_id, coords))
+            try:
+                obj_class_id = int(parts[0])
+                if obj_class_id not in class_ids:
+                    continue
+                coords = np.array(parts[1:], dtype=float)
+                valid_objects.append((obj_class_id, coords))
+            except: continue
 
         if not valid_objects:
-            return 0
+            return stats
 
-        image_name = label_file.replace('.txt', '.jpg').replace('.png', '.jpg') # Assumption on jpg?
-        # Robust extension check
-        possible_exts = ['.jpg', '.jpeg', '.png', '.bmp']
-        found_image = None
+        # Find the image file
         base_name = os.path.splitext(label_file)[0]
+        possible_exts = ['.jpg', '.jpeg', '.png', '.bmp']
+        found_image_path = None
         
         for ext in possible_exts:
             p = os.path.join(images_dir, base_name + ext)
             if os.path.exists(p):
-                found_image = p
-                image_name = base_name + ext
+                found_image_path = p
                 break
         
-        if not found_image:
-            return 0
+        if not found_image_path:
+            stats["skip_no_image"] = len(valid_objects) * num_augmentations
+            return stats
 
-        image = cv2.imread(found_image)
-        if image is None: return 0
+        image = cv2.imread(found_image_path)
+        if image is None: 
+            stats["skip_load_fail"] = len(valid_objects) * num_augmentations
+            return stats
         
-        generated_count = 0
+        img_h, img_w = image.shape[:2]
 
+        # For each valid object, generate num_augmentations
+        for obj_idx, (class_id, coords) in enumerate(valid_objects):
+            # Extract object once
+            obj_roi, mask_roi, w, h, _ = DataAugmentor.extract_object(
+                image, coords, img_w, img_h, min_width, min_height
+            )
+            
+            if obj_roi is None:
+                stats["skip_size"] += num_augmentations
+                continue
 
-        return generated_count
+            for aug_idx in range(num_augmentations):
+                # Apply augmentations (with retries for random failure)
+                success = False
+                for _ in range(5):
+                    aug_obj, aug_mask, new_w, new_h, _, _ = DataAugmentor.apply_augmentations(
+                        obj_roi, mask_roi, w, h,
+                        rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
+                        max_region_w, max_region_h
+                    )
+                    
+                    if aug_obj is not None:
+                        # Place on a fresh background copy
+                        bg_source = background_img if background_img is not None else background_img_global
+                        if bg_source is None:
+                            break
+                        
+                        bg_copy = bg_source.copy()
+                        bg_h, bg_w = bg_copy.shape[:2]
+
+                        # Determine placement position (within ROI if provided)
+                        if roi:
+                            rx, ry, rw, rh = roi
+                            roi_x_px, roi_y_px = int(rx * bg_w), int(ry * bg_h)
+                            roi_w_px, roi_h_px = int(rw * bg_w), int(rh * bg_h)
+                            
+                            max_x = max(roi_x_px, roi_x_px + roi_w_px - new_w)
+                            max_y = max(roi_y_px, roi_y_px + roi_h_px - new_h)
+                            
+                            rand_x = random.randint(roi_x_px, max_x)
+                            rand_y = random.randint(roi_y_px, max_y)
+                        else:
+                            rand_x = random.randint(0, max(0, bg_w - new_w))
+                            rand_y = random.randint(0, max(0, bg_h - new_h))
+
+                        DataAugmentor.place_object(bg_copy, aug_obj, aug_mask, rand_x, rand_y)
+
+                        # Save Image
+                        # Use a unique enough name to avoid collisions if base_name is repeated in future recursive scans
+                        # For now, it's flat so this is fine.
+                        out_name = f"{base_name}_obj{obj_idx}_aug{aug_idx}.jpg"
+                        cv2.imwrite(os.path.join(output_dir, 'images', out_name), bg_copy)
+
+                        # Save Label (Single object)
+                        cx = (rand_x + new_w / 2) / bg_w
+                        cy = (rand_y + new_h / 2) / bg_h
+                        nw = new_w / bg_w
+                        nh = new_h / bg_h
+                        
+                        # Clip to [0, 1]
+                        cx = max(0, min(1.0, cx))
+                        cy = max(0, min(1.0, cy))
+                        nw = max(0, min(1.0, nw))
+                        nh = max(0, min(1.0, nh))
+                        
+                        label_out = f"{class_id} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}\n"
+                        with open(os.path.join(output_dir, 'labels', out_name.replace('.jpg', '.txt')), 'w') as f:
+                            f.write(label_out)
+
+                        stats["success"] += 1
+                        success = True
+                        break
+                
+                if not success:
+                    stats["skip_fail_aug"] += 1
+
+        return stats
 
     @staticmethod
     def init_worker(bg_img_shared):
@@ -933,59 +1020,56 @@ class DataAugmentor:
         print(f"DEBUG: Found {len(valid_label_files)} files containing {total_valid_objects} valid objects.")
         
         generated_objects_count = 0
-        completed_objects = 0
+        
+        # Prepare tasks for each label file
+        tasks = [
+            (label_file, images_dir, labels_dir, None, output_dir, class_ids,
+             num_augmentations, rotation_range, blur_range, scaling_range, contrast_range, brightness_range, region_scale,
+             image_w, image_h, max_region_w, max_region_h, augment_together, 
+             min_width, min_height, roi)
+            for label_file in valid_label_files
+        ]
 
-        with ProcessPoolExecutor() as executor:
-            # Prepare arguments
-            # Note: We need to pass the background image array, which is heavy to pickle?
-            # Creating shared memory or just letting it pickle (it's one image) is probably fine for a few workers.
-            futures = [
-                executor.submit(
-                    DataAugmentor.process_file_wrapper, 
-                    (label_file, images_dir, labels_dir, background_img, output_dir, class_ids,
-                    num_augmentations, rotation_range, blur_range, scaling_range, contrast_range, brightness_range, region_scale,
-                    image_w, image_h, max_region_w, max_region_h, augment_together, 
-                    min_width, min_height)
-                ) for label_file in valid_label_files
-            ]
+        # We use a Pool with initializer for memory efficiency (sharing background_img)
+        num_workers = max(1, cpu_count() - 1)
+        num_workers = min(num_workers, len(tasks)) if tasks else 1
 
-            completed = 0
-            for future in as_completed(futures):
-                result = future.result()
-                generated_objects_count += result
+        print(f"Starting standard augmentation for {len(tasks)} files...")
+
+        aggregate_stats = {
+            "success": 0,
+            "skip_size": 0,
+            "skip_no_image": 0,
+            "skip_load_fail": 0,
+            "skip_fail_aug": 0
+        }
+
+        with Pool(processes=num_workers, initializer=DataAugmentor.init_worker, initargs=(background_img,)) as pool:
+            # Total output = valid_input_objects * num_augmentations (standard case)
+            if not augment_together:
+                estimated_total_output = total_valid_objects * num_augmentations
+            else:
+                estimated_total_output = len(valid_label_files) * num_augmentations
+
+            for result in tqdm(pool.imap_unordered(DataAugmentor.process_file_wrapper, tasks), total=len(tasks), desc="Augmenting"):
+                if isinstance(result, dict):
+                    for k in aggregate_stats:
+                        aggregate_stats[k] += result.get(k, 0)
                 
-                # Estimate input objects processed based on output
-                # If augment_together is False: result = input_objs * num_augs
-                # If augment_together is True: result = num_augs (per file)
+                generated_objects_count = aggregate_stats["success"]
                 
-                if not augment_together:
-                     # Avoid division by zero if num_augmentations is weirdly 0
-                     denom = num_augmentations if num_augmentations > 0 else 1
-                     completed_objects += (result // denom)
-                else:
-                     # In augment together mode, we can't easily track per-object progress via result
-                     # We might just fall back to tracking files? 
-                     # But user asked for objects. Better to track "Scene" progress?
-                     # Let's stick to files for 'augment_together' or try to approximate.
-                     # But for standard mode (user case), the above logic works.
-                     pass 
-
                 if progress_callback:
-                    if not augment_together:
-                        # User wants progress per OUTPUT file
-                        # Total output = valid_input_objects * num_augmentations
-                        estimated_total_output = total_valid_objects * num_augmentations
-                        progress_callback(generated_objects_count, estimated_total_output)
-                    else:
-                        # For augment_together, one input file -> num_augs output files
-                        # Total output = valid_input_files * num_augmentations
-                        estimated_total_output = len(valid_label_files) * num_augmentations
-                        
-                        # We need to track actual generated count for this
-                        # generated_objects_count tracks output files in augment_together too
-                        progress_callback(generated_objects_count, estimated_total_output)
+                    progress_callback(generated_objects_count, estimated_total_output)
 
-        return generated_objects_count
+        print(f"\nAugmentation Summary:")
+        print(f" - Estimated target: {estimated_total_output}")
+        print(f" - Successfully generated: {aggregate_stats['success']}")
+        print(f" - Skipped (Too small): {aggregate_stats['skip_size']}")
+        print(f" - Skipped (Missing Image): {aggregate_stats['skip_no_image']}")
+        print(f" - Skipped (Load Fail): {aggregate_stats['skip_load_fail']}")
+        print(f" - Skipped (Augment Fail): {aggregate_stats['skip_fail_aug']}")
+
+        return aggregate_stats["success"]
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Multi-Class Instance Segmentation Data Augmentation')
