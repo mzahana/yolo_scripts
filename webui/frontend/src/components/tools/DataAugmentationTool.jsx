@@ -64,13 +64,20 @@ const DataAugmentationTool = ({
     const [augmentationMode, setAugmentationMode] = useState('single'); // 'single', 'composition'
     const [compTotalImages, setCompTotalImages] = useState(10);
     const [compObjectsPerImage, setCompObjectsPerImage] = useState(3);
-    const [customOutputName, setCustomOutputName] = useState('');
+    const [localOutputPath, setLocalOutputPath] = useState('');
 
 
     // Interactive ROI Selection State
     const bgContainerRef = useRef(null);
     const [isSelecting, setIsSelecting] = useState(false);
     const [selectionStart, setSelectionStart] = useState(null); // {x, y} percentage
+    const bgImageRef = useRef(null); // Ref for the background image to get natural dimensions
+
+    // Size Constraint State
+    const [excludeSmallObjects, setExcludeSmallObjects] = useState(false);
+    const [minSize, setMinSize] = useState({ w: 0, h: 0 }); // In pixels (for display/API)
+    const [minSizeROI, setMinSizeROI] = useState({ x: 0, y: 0, w: 0, h: 0 }); // In % (for visualization)
+    const [selectionMode, setSelectionMode] = useState('roi'); // 'roi' or 'minSize'
 
     // Dropdown State
     const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -82,6 +89,17 @@ const DataAugmentationTool = ({
         if (localDatasetPath) {
             handleFetchClasses(localDatasetPath);
             fetchStats(localDatasetPath);
+
+            // Set default output path: parent of dataset + '/augmented'
+            // Simple string manipulation for path; backend will handle robustness
+            const parts = localDatasetPath.split(/[/\\]/);
+            if (parts.length > 1) {
+                parts.pop(); // Remove dataset folder name
+                const parent = parts.join('/') || '/';
+                setLocalOutputPath(`${parent}/augmented`);
+            } else {
+                setLocalOutputPath('augmented');
+            }
         }
     }, [localDatasetPath]);
 
@@ -167,7 +185,9 @@ const DataAugmentationTool = ({
                 blur_range: params.blur_range || null,
                 scaling_range: params.scaling_range || null,
                 contrast_range: params.contrast_range || null,
-                brightness_range: params.brightness_range || null
+                brightness_range: params.brightness_range || null,
+                min_width: excludeSmallObjects ? minSize.w : 0,
+                min_height: excludeSmallObjects ? minSize.h : 0
             };
 
             const res = await axios.post("/api/augmentation/apply_preview", payload);
@@ -261,7 +281,9 @@ const DataAugmentationTool = ({
             composition_mode: augmentationMode === 'composition',
             total_images: compTotalImages,
             objects_per_image: compObjectsPerImage,
-            custom_output_name: customOutputName,
+            output_path: localOutputPath,
+            min_width: excludeSmallObjects ? minSize.w : 0,
+            min_height: excludeSmallObjects ? minSize.h : 0,
             ...mergedParams
         };
 
@@ -287,8 +309,13 @@ const DataAugmentationTool = ({
 
         setSelectionStart({ x, y });
         setIsSelecting(true);
-        // Init zero-size box
-        setRoi({ x: Math.round(x), y: Math.round(y), w: 0, h: 0 });
+        // Init zero-size box in current mode
+        if (selectionMode === 'roi') {
+            setRoi({ x: Math.round(x), y: Math.round(y), w: 0, h: 0 });
+        } else {
+            setMinSizeROI({ x: Math.round(x), y: Math.round(y), w: 0, h: 0 });
+            setMinSize({ w: 0, h: 0 });
+        }
     };
 
     const handleMouseMove = (e) => {
@@ -311,12 +338,30 @@ const DataAugmentationTool = ({
         if (newX + newW > 100) newW = 100 - newX;
         if (newY + newH > 100) newH = 100 - newY;
 
-        setRoi({ x: Math.round(newX), y: Math.round(newY), w: Math.round(newW), h: Math.round(newH) });
+        const roundedBox = { x: Math.round(newX), y: Math.round(newY), w: Math.round(newW), h: Math.round(newH) };
+
+        if (selectionMode === 'roi') {
+            setRoi(roundedBox);
+        } else {
+            setMinSizeROI(roundedBox);
+            // Calculate actual pixels if image is loaded
+            if (bgImageRef.current) {
+                const nw = bgImageRef.current.naturalWidth;
+                const nh = bgImageRef.current.naturalHeight;
+                setMinSize({
+                    w: Math.round((roundedBox.w / 100) * nw),
+                    h: Math.round((roundedBox.h / 100) * nh)
+                });
+            }
+        }
     };
 
     const handleMouseUp = () => {
         setIsSelecting(false);
         setSelectionStart(null);
+        if (selectionMode === 'minSize') {
+            setSelectionMode('roi'); // Auto-switch back to ROI selection after defining min size
+        }
     };
 
     // ----------------------------------------------------
@@ -455,17 +500,39 @@ const DataAugmentationTool = ({
                                 onMouseLeave={handleMouseUp}
                                 style={{ width: '300px', position: 'relative', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.2)', overflow: 'hidden', cursor: 'crosshair', userSelect: 'none' }}
                             >
-                                <img src={backgroundPreviewUrl} alt="Background" style={{ width: '100%', display: 'block', pointerEvents: 'none' }} />
+                                <img
+                                    ref={bgImageRef}
+                                    src={backgroundPreviewUrl}
+                                    alt="Background"
+                                    style={{ width: '100%', display: 'block', pointerEvents: 'none' }}
+                                />
+                                {/* ROI Box */}
                                 <div style={{
                                     position: 'absolute',
                                     left: `${roi.x}%`, top: `${roi.y}%`, width: `${roi.w}%`, height: `${roi.h}%`,
                                     border: '2px solid #00ff00', background: 'rgba(0, 255, 0, 0.2)',
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                    pointerEvents: 'none' // Ensure clicks pass through if needed
+                                    display: selectionMode === 'roi' || !isSelecting ? 'flex' : 'none',
+                                    alignItems: 'center', justifyContent: 'center',
+                                    pointerEvents: 'none'
                                 }}>
                                     <span style={{ color: '#00ff00', fontSize: '0.7rem', fontWeight: 'bold', textShadow: '0 1px 2px black' }}>ROI</span>
                                 </div>
-                                <div style={{ position: 'absolute', bottom: '5px', right: '5px', fontSize: '0.7rem', background: 'rgba(0,0,0,0.6)', padding: '2px 5px', borderRadius: '4px' }}>Preview</div>
+
+                                {/* Min Size Constraint Box (Only when selecting or if we want to visualize it?) */}
+                                {(isSelecting && selectionMode === 'minSize') && (
+                                    <div style={{
+                                        position: 'absolute',
+                                        left: `${minSizeROI.x}%`, top: `${minSizeROI.y}%`, width: `${minSizeROI.w}%`, height: `${minSizeROI.h}%`,
+                                        border: '2px dashed #ff00ff', background: 'rgba(255, 0, 255, 0.2)',
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                        pointerEvents: 'none'
+                                    }}>
+                                        <span style={{ color: '#ff00ff', fontSize: '0.7rem', fontWeight: 'bold', textShadow: '0 1px 2px black' }}>MIN SIZE</span>
+                                    </div>
+                                )}
+                                <div style={{ position: 'absolute', bottom: '5px', right: '5px', fontSize: '0.7rem', background: 'rgba(0,0,0,0.6)', padding: '2px 5px', borderRadius: '4px' }}>
+                                    {selectionMode === 'roi' ? 'ROI Mode' : 'Defining Min Size...'}
+                                </div>
                             </div>
                         ) : (
                             <div style={{ width: '300px', height: '180px', background: 'rgba(0,0,0,0.3)', borderRadius: '8px', border: '1px dashed rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column' }}>
@@ -474,22 +541,73 @@ const DataAugmentationTool = ({
                             </div>
                         )}
 
-                        {/* Controls */}
-                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '15px' }}>
                             {/* ROI Inputs */}
-                            <div>
-                                <div style={{ fontSize: '0.9rem', opacity: 0.9, marginBottom: '10px' }}>Random Placement ROI (X, Y, W, H %)</div>
-                                <div style={{ display: 'flex', gap: '15px' }}>
+                            <div style={{ background: 'rgba(255,255,255,0.02)', padding: '15px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                                    <div style={{ fontSize: '0.9rem', opacity: 0.9 }}>Random Placement ROI (%)</div>
+                                    <button
+                                        onClick={() => setSelectionMode('roi')}
+                                        className="btn-browse"
+                                        style={{ fontSize: '0.7rem', padding: '3px 8px', borderColor: selectionMode === 'roi' ? 'var(--primary)' : undefined }}
+                                    >
+                                        🎯 Select Interactively
+                                    </button>
+                                </div>
+                                <div style={{ display: 'flex', gap: '10px' }}>
                                     {['x', 'y', 'w', 'h'].map(k => (
                                         <div key={k} style={{ flex: 1 }}>
-                                            <div style={{ fontSize: '0.75rem', opacity: 0.6, textAlign: 'center', marginBottom: '4px' }}>{k.toUpperCase()}</div>
+                                            <div style={{ fontSize: '0.7rem', opacity: 0.6, textAlign: 'center', marginBottom: '2px' }}>{k.toUpperCase()}</div>
                                             <input type="number" value={roi[k]}
-                                                onChange={e => setRoi({ ...roi, [k]: parseInt(e.target.value) })}
-                                                style={{ width: '100%', padding: '10px', background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: '6px', textAlign: 'center', fontSize: '1rem' }}
+                                                onChange={e => setRoi({ ...roi, [k]: parseInt(e.target.value) || 0 })}
+                                                style={{ width: '100%', padding: '6px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: '4px', textAlign: 'center', fontSize: '0.9rem' }}
                                             />
                                         </div>
                                     ))}
                                 </div>
+                            </div>
+
+                            {/* Size Constraint */}
+                            <div style={{ background: 'rgba(255,255,255,0.02)', padding: '15px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px', alignItems: 'center' }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem' }}>
+                                        <input type="checkbox" checked={excludeSmallObjects} onChange={e => setExcludeSmallObjects(e.target.checked)} />
+                                        Exclude Small Objects
+                                    </label>
+                                    {excludeSmallObjects && (
+                                        <button
+                                            onClick={() => setSelectionMode('minSize')}
+                                            className="btn-browse"
+                                            style={{ fontSize: '0.7rem', padding: '3px 8px', borderColor: selectionMode === 'minSize' ? 'var(--primary)' : undefined }}
+                                        >
+                                            📐 Define Size Interactively
+                                        </button>
+                                    )}
+                                </div>
+
+                                {excludeSmallObjects && (
+                                    <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+                                        <div style={{ flex: 1 }}>
+                                            <div style={{ fontSize: '0.75rem', opacity: 0.6, marginBottom: '4px' }}>Min Width (Pixels)</div>
+                                            <input type="number" value={minSize.w}
+                                                onChange={e => setMinSize({ ...minSize, w: parseInt(e.target.value) || 0 })}
+                                                style={{ width: '100%', padding: '8px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: '6px', textAlign: 'center' }}
+                                            />
+                                        </div>
+                                        <div style={{ flex: 1 }}>
+                                            <div style={{ fontSize: '0.75rem', opacity: 0.6, marginBottom: '4px' }}>Min Height (Pixels)</div>
+                                            <input type="number" value={minSize.h}
+                                                onChange={e => setMinSize({ ...minSize, h: parseInt(e.target.value) || 0 })}
+                                                style={{ width: '100%', padding: '8px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: '6px', textAlign: 'center' }}
+                                            />
+                                        </div>
+                                        {bgImageRef.current && (
+                                            <div style={{ fontSize: '0.75rem', opacity: 0.5, fontStyle: 'italic', marginTop: '15px' }}>
+                                                BG: {bgImageRef.current.naturalWidth} x {bgImageRef.current.naturalHeight} px
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
 
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
@@ -509,26 +627,35 @@ const DataAugmentationTool = ({
                                     </button>
                                 </div>
 
-                                {/* Custom Output Name */}
+                                {/* Output Path Selection */}
                                 <div style={{ marginBottom: '15px' }}>
-                                    <div style={{ fontSize: '0.85rem', opacity: 0.8, marginBottom: '5px' }}>Output Folder Name (Optional)</div>
-                                    <input
-                                        type="text"
-                                        placeholder="e.g. augmented_dataset_v1"
-                                        value={customOutputName}
-                                        onChange={e => setCustomOutputName(e.target.value)}
-                                        style={{
-                                            width: '100%',
-                                            padding: '10px',
-                                            background: 'rgba(0,0,0,0.2)',
-                                            border: '1px solid rgba(255,255,255,0.1)',
-                                            color: 'white',
-                                            borderRadius: '6px',
-                                            fontSize: '0.9rem'
-                                        }}
-                                    />
+                                    <div style={{ fontSize: '0.85rem', opacity: 0.8, marginBottom: '5px' }}>Output Dataset Path</div>
+                                    <div style={{ display: 'flex', gap: '10px' }}>
+                                        <button
+                                            onClick={() => handleLandingBrowse(setLocalOutputPath, 'dir')}
+                                            className="btn-browse"
+                                            style={{ whiteSpace: 'nowrap' }}
+                                        >
+                                            📂 Browse
+                                        </button>
+                                        <input
+                                            type="text"
+                                            placeholder="Absolute path to output folder"
+                                            value={localOutputPath}
+                                            onChange={e => setLocalOutputPath(e.target.value)}
+                                            style={{
+                                                flex: 1,
+                                                padding: '10px',
+                                                background: 'rgba(0,0,0,0.2)',
+                                                border: '1px solid rgba(255,255,255,0.1)',
+                                                color: 'white',
+                                                borderRadius: '6px',
+                                                fontSize: '0.9rem'
+                                            }}
+                                        />
+                                    </div>
                                     <div style={{ fontSize: '0.75rem', opacity: 0.5, marginTop: '3px' }}>
-                                        If left empty, defaults to 'augmented' subfolder.
+                                        Defaults to 'augmented' in the dataset's parent directory.
                                     </div>
                                 </div>
 

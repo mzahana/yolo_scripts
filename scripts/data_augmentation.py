@@ -175,7 +175,7 @@ class DataAugmentor:
         return aug_obj, aug_mask, new_w, new_h, rotation_matrix, scale_factor
 
     @staticmethod
-    def extract_object(image, coords_norm, image_w, image_h):
+    def extract_object(image, coords_norm, image_w, image_h, min_width=0, min_height=0):
         """
         Extracts an object from the image using normalized coordinates.
         Handles both Polygon (list of points) and BBox (center_x, center_y, w, h).
@@ -224,6 +224,12 @@ class DataAugmentor:
         if w <= 0 or h <= 0:
             return None, None, 0, 0, None
             
+        # Size threshold check (pixels)
+        if min_width > 0 and w < min_width:
+            return None, None, 0, 0, None
+        if min_height > 0 and h < min_height:
+            return None, None, 0, 0, None
+
         obj_roi = cv2.bitwise_and(image, image, mask=mask)
         obj_roi = obj_roi[y:y + h, x:x + w]
         mask_roi = mask[y:y + h, x:x + w]
@@ -244,7 +250,9 @@ class DataAugmentor:
         contrast_range=None,
         brightness_range=None,
         region_scale=0.8,
-        roi=None
+        roi=None,
+        min_width=0,
+        min_height=0
     ):
         """
         Generates a single preview image by extracting one object and placing it on the background.
@@ -266,7 +274,9 @@ class DataAugmentor:
         image_h, image_w = image.shape[:2]
         
         # Extract object
-        obj_roi, mask_roi, w, h, coords_relative = DataAugmentor.extract_object(image, coords, image_w, image_h)
+        obj_roi, mask_roi, w, h, coords_relative = DataAugmentor.extract_object(
+            image, coords, image_w, image_h, min_width, min_height
+        )
         if obj_roi is None:
             return None
             
@@ -333,7 +343,8 @@ class DataAugmentor:
     def process_label_file(
         label_file, images_dir, labels_dir, background_img, output_dir, class_ids, 
         num_augmentations, rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
-        region_scale, image_w, image_h, max_region_w, max_region_h, augment_together
+        region_scale, image_w, image_h, max_region_w, max_region_h, augment_together,
+        min_width=0, min_height=0
     ):
         label_path = os.path.join(labels_dir, label_file)
         with open(label_path, 'r') as lf:
@@ -381,7 +392,9 @@ class DataAugmentor:
                 aug_labels = []
                 
                 for obj_class_id, coords in valid_objects:
-                    obj_roi, mask_roi, w, h, coords_relative = DataAugmentor.extract_object(image, coords, image_w, image_h)
+                    obj_roi, mask_roi, w, h, coords_relative = DataAugmentor.extract_object(
+                        image, coords, image_w, image_h, min_width, min_height
+                    )
                     if obj_roi is None: continue
 
                     aug_obj, aug_mask, new_w, new_h, rotation_matrix, scale_factor = DataAugmentor.apply_augmentations(
@@ -418,7 +431,9 @@ class DataAugmentor:
                     generated_count += 1
         else:
             for obj_idx, (obj_class_id, coords) in enumerate(valid_objects):
-                obj_roi, mask_roi, w, h, coords_relative = DataAugmentor.extract_object(image, coords, image_w, image_h)
+                obj_roi, mask_roi, w, h, coords_relative = DataAugmentor.extract_object(
+                    image, coords, image_w, image_h, min_width, min_height
+                )
                 if obj_roi is None: continue
 
                 for i in range(num_augmentations):
@@ -462,7 +477,8 @@ class DataAugmentor:
         total_images, objects_per_image, 
         rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
         region_scale, image_w, image_h, max_region_w, max_region_h,
-        update_progress_callback=None, roi=None
+        update_progress_callback=None, roi=None,
+        min_width=0, min_height=0
     ):
         """
         Generates 'total_images' number of images.
@@ -530,7 +546,9 @@ class DataAugmentor:
                     src_h, src_w = src_img.shape[:2]
                     
                     # Extract
-                    obj_roi, mask_roi, w, h, coords_relative = DataAugmentor.extract_object(src_img, obj_coords, src_w, src_h)
+                    obj_roi, mask_roi, w, h, coords_relative = DataAugmentor.extract_object(
+                        src_img, obj_coords, src_w, src_h, min_width, min_height
+                    )
                     if obj_roi is None:
                         retries += 1
                         continue
@@ -650,7 +668,8 @@ class DataAugmentor:
         scaling_range=None, contrast_range=None, brightness_range=None, region_scale=0.8, 
         augment_together=False, progress_callback: Optional[Callable[[int, int], None]] = None,
         roi=None,
-        composition_mode=False, total_images=10, objects_per_image=3
+        composition_mode=False, total_images=10, objects_per_image=3,
+        min_width=0, min_height=0
     ):
         print(f"DEBUG: DataAugmentor.run called with composition_mode={composition_mode}, total_images={total_images}, objects_per_image={objects_per_image}")
         if isinstance(class_ids, int):
@@ -721,7 +740,8 @@ class DataAugmentor:
                  total_images, objects_per_image,
                  rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
                  region_scale, image_w, image_h, max_region_w, max_region_h,
-                 progress_callback, roi
+                 progress_callback, roi,
+                 min_width=min_width, min_height=min_height
              )
 
         # Standard Mode (Single object per image)
@@ -765,7 +785,8 @@ class DataAugmentor:
                     DataAugmentor.process_file_wrapper, 
                     (label_file, images_dir, labels_dir, background_img, output_dir, class_ids,
                     num_augmentations, rotation_range, blur_range, scaling_range, contrast_range, brightness_range, region_scale,
-                    image_w, image_h, max_region_w, max_region_h, augment_together)
+                    image_w, image_h, max_region_w, max_region_h, augment_together, 
+                    min_width, min_height)
                 ) for label_file in valid_label_files
             ]
 

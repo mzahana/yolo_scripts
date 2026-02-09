@@ -199,6 +199,8 @@ class AugmentationPreviewRequest(BaseModel):
     brightness_range: Optional[List[int]] = None
     region_scale: float = 0.8
     roi: Optional[List[float]] = None # [x, y, w, h] normalized
+    min_width: int = 0
+    min_height: int = 0
     
 class AugmentationGenerateRequest(AugmentationPreviewRequest):
     output_path: Optional[str] = None
@@ -946,7 +948,9 @@ def apply_augmentation_preview(request: AugmentationApplyPreviewRequest):
             request.contrast_range,
             request.brightness_range,
             request.region_scale,
-            request.roi
+            request.roi,
+            request.min_width,
+            request.min_height
         )
     except Exception as e:
          raise HTTPException(status_code=500, detail=str(e))
@@ -968,16 +972,11 @@ def generate_augmentation(req: AugmentationGenerateRequest, background_tasks: Ba
              "result": None
         }
         
-        # Determine output path if not set
         # Determine output path structure
-        if req.custom_output_name:
-             # Subdirectory with custom name
+        if not req.output_path:
+             # Default: 'augmented' in the parent directory of the dataset
              p = Path(req.dataset_path)
-             req.output_path = str(p / req.custom_output_name)
-        elif not req.output_path:
-             # Default: subfolder 'augmented'
-             p = Path(req.dataset_path)
-             req.output_path = str(p / "augmented")
+             req.output_path = str(p.parent / "augmented")
 
         background_tasks.add_task(
             DataAugmentationManager.run_augmentation_task,
@@ -997,7 +996,9 @@ def generate_augmentation(req: AugmentationGenerateRequest, background_tasks: Ba
             roi=req.roi,
             composition_mode=req.composition_mode,
             total_images=req.total_images,
-            objects_per_image=req.objects_per_image
+            objects_per_image=req.objects_per_image,
+            min_width=req.min_width,
+            min_height=req.min_height
         )
         
         return {"status": "started", "output_path": req.output_path}

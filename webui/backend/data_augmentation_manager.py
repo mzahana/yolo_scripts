@@ -162,7 +162,9 @@ class DataAugmentationManager:
         contrast_range: Optional[List[float]],
         brightness_range: Optional[List[int]],
         region_scale: float,
-        roi: Optional[List[float]] = None
+        roi: Optional[List[float]] = None,
+        min_width: int = 0,
+        min_height: int = 0
     ) -> Dict:
         """
         Applies augmentation to the currently cached sample object.
@@ -178,7 +180,8 @@ class DataAugmentationManager:
 
         preview_img = DataAugmentor.generate_single_preview(
             sample["image_path"], sample["label_line"], bg_img,
-            rotation_range, blur_range, scaling_range, contrast_range, brightness_range, region_scale, roi_tuple
+            rotation_range, blur_range, scaling_range, contrast_range, brightness_range, region_scale, roi_tuple,
+            min_width=min_width, min_height=min_height
         )
         
         if preview_img is None: raise ValueError("Failed to generate preview")
@@ -211,7 +214,9 @@ class DataAugmentationManager:
         roi: Optional[List[float]] = None,
         composition_mode: bool = False,
         total_images: int = 10,
-        objects_per_image: int = 3
+        objects_per_image: int = 3,
+        min_width: int = 0,
+        min_height: int = 0
     ):
         """
         Runs the full augmentation. Designed to be run in a thread.
@@ -248,7 +253,9 @@ class DataAugmentationManager:
                 roi=roi_tuple,
                 composition_mode=composition_mode,
                 total_images=total_images,
-                objects_per_image=objects_per_image
+                objects_per_image=objects_per_image,
+                min_width=min_width,
+                min_height=min_height
             )
             progress_tracker["status"] = "idle"
             progress_tracker["result"] = {"count": count, "output_path": output_path}
