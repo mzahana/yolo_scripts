@@ -285,7 +285,7 @@ class DataAugmentationManager:
         def update_progress(current, total):
             progress_tracker["current"] = current
             progress_tracker["total"] = total
-            progress_tracker["status"] = "running"
+            progress_tracker["status"] = "augmentation"
             progress_tracker["message"] = f"Processing {current}/{total} files..."
 
         try:

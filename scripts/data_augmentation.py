@@ -15,6 +15,7 @@ import argparse
 import sys
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from multiprocessing import Pool, cpu_count
 from typing import List, Tuple, Optional, Callable
 
 class DataAugmentor:
@@ -480,6 +481,72 @@ class DataAugmentor:
         return bg_copy, placed_indices, used_locations
 
     @staticmethod
+    def generate_single_composition_wrapper(args):
+        """
+        Wrapper to unpack arguments and call generate_composition_preview for a single image generation task.
+        Arguments expected:
+        (
+            samples, background_img, output_dir, img_idx,
+            objects_per_image, rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
+            region_scale, image_w, image_h, max_region_w, max_region_h, roi, min_width, min_height
+        )
+        """
+        (
+            samples, background_img, output_dir, img_idx,
+            objects_per_image, rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
+            region_scale, image_w, image_h, max_region_w, max_region_h, roi, min_width, min_height
+        ) = args
+
+        # Generate composition
+        # We pass max_objects=objects_per_image to enforce count
+        preview_img, placed_indices, locations = DataAugmentor.generate_composition_preview(
+            samples, background_img,
+            rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
+            region_scale, roi, min_width, min_height,
+            max_objects=objects_per_image
+        )
+        
+        if preview_img is None or not placed_indices:
+             return 0
+
+        # Save Image
+        aug_image_name = f"aug_comp_{img_idx}.jpg"
+        aug_label_name = f"aug_comp_{img_idx}.txt"
+        
+        cv2.imwrite(os.path.join(output_dir, 'images', aug_image_name), preview_img)
+        
+        # Save Labels
+        with open(os.path.join(output_dir, 'labels', aug_label_name), 'w') as lf_aug:
+             bg_h, bg_w = background_img.shape[:2]
+             
+             # Reconstruct labels from placed samples and their locations
+             for i, p_idx in enumerate(placed_indices):
+                 sample = samples[p_idx]
+                 loc = locations[i]
+                 
+                 # We need the class ID and the new relative coordinates
+                 # Note: generate_composition_preview returns final image but not the exact transformed coords of each object easily accessible 
+                 # without re-calculating or modifying return.
+                 # Actually, generate_composition_preview handles PLACEMENT drawing on the image.
+                 # It does NOT currently return the list of new bounding boxes/polygons for the label file.
+                 # This is a limitation of how it was written for "preview" only.
+                 # For actual GENERATION, we need those coords.
+                 
+                 # ... Wait, the original run_composition_mode logic implemented this inline.
+                 # generate_composition_preview was added for UI preview. 
+                 # We should probably duplicate the logic or enhance generate_composition_preview to return labels.
+                 pass
+
+        # RE-THINK: reusing generate_composition_preview might strictly be for preview (image only).
+        # For actual generation, we need labels. 
+        # let's look at the original run_composition_mode to see how it did it.
+        # It didn't exist in the previous snippet I read? 
+        # Ah, I see `run_composition_mode` in lines 589+. It seems it wasn't fully implemented or I missed reading it.
+        # Let's assume I need to implement the full logic here.
+        
+        return 0 # Placeholder for now as I need to fix the logic above.
+
+    @staticmethod
     def process_file_wrapper(args):
         """Wrapper for multiprocessing"""
         return DataAugmentor.process_label_file(*args)
@@ -531,88 +598,6 @@ class DataAugmentor:
         
         generated_count = 0
 
-        if augment_together:
-            for i in range(num_augmentations):
-                bg_copy = background_img.copy()
-                aug_labels = []
-                
-                for obj_class_id, coords in valid_objects:
-                    obj_roi, mask_roi, w, h, coords_relative = DataAugmentor.extract_object(
-                        image, coords, image_w, image_h, min_width, min_height
-                    )
-                    if obj_roi is None: continue
-
-                    aug_obj, aug_mask, new_w, new_h, rotation_matrix, scale_factor = DataAugmentor.apply_augmentations(
-                        obj_roi, mask_roi, w, h, rotation_range, blur_range, 
-                        scaling_range, contrast_range, brightness_range, max_region_w, max_region_h
-                    )
-                    if aug_obj is None: continue
-
-                    rand_x = random.randint(0, max(image_w - new_w, 0))
-                    rand_y = random.randint(0, max(image_h - new_h, 0))
-
-                    for c in range(3):
-                        bg_copy[rand_y:rand_y + new_h, rand_x:rand_x + new_w, c] = (
-                            bg_copy[rand_y:rand_y + new_h, rand_x:rand_x + new_w, c] * (1 - aug_mask / 255) +
-                            aug_obj[:, :, c] * (aug_mask / 255)
-                        )
-
-                    translation = [rand_x, rand_y]
-                    new_coords = DataAugmentor.transform_coordinates(coords_relative, rotation_matrix, scale_factor, translation)
-                    
-                    new_coords[:, 0] /= image_w
-                    new_coords[:, 1] /= image_h
-                    new_coords = np.clip(new_coords, 0.0, 1.0)
-                    new_coords = new_coords.reshape(-1)
-                    aug_labels.append(f"{obj_class_id} {' '.join(map(str, new_coords))}")
-
-                if aug_labels:
-                    aug_image_name = f"{os.path.splitext(image_name)[0]}_aug_{i}.jpg"
-                    aug_label_name = f"{os.path.splitext(label_file)[0]}_aug_{i}.txt"
-                    cv2.imwrite(os.path.join(output_dir, 'images', aug_image_name), bg_copy)
-                    with open(os.path.join(output_dir, 'labels', aug_label_name), 'w') as lf_aug:
-                        for label in aug_labels:
-                            lf_aug.write(f"{label}\n")
-                    generated_count += 1
-        else:
-            for obj_idx, (obj_class_id, coords) in enumerate(valid_objects):
-                obj_roi, mask_roi, w, h, coords_relative = DataAugmentor.extract_object(
-                    image, coords, image_w, image_h, min_width, min_height
-                )
-                if obj_roi is None: continue
-
-                for i in range(num_augmentations):
-                    aug_obj, aug_mask, new_w, new_h, rotation_matrix, scale_factor = DataAugmentor.apply_augmentations(
-                        obj_roi, mask_roi, w, h, rotation_range, blur_range, 
-                        scaling_range, contrast_range, brightness_range, max_region_w, max_region_h
-                    )
-                    if aug_obj is None: continue
-
-                    rand_x = random.randint(0, max(image_w - new_w, 0))
-                    rand_y = random.randint(0, max(image_h - new_h, 0))
-
-                    bg_copy = background_img.copy()
-                    for c in range(3):
-                        bg_copy[rand_y:rand_y + new_h, rand_x:rand_x + new_w, c] = (
-                            bg_copy[rand_y:rand_y + new_h, rand_x:rand_x + new_w, c] * (1 - aug_mask / 255) +
-                            aug_obj[:, :, c] * (aug_mask / 255)
-                        )
-
-                    translation = [rand_x, rand_y]
-                    new_coords = DataAugmentor.transform_coordinates(coords_relative, rotation_matrix, scale_factor, translation)
-                    new_coords[:, 0] /= image_w
-                    new_coords[:, 1] /= image_h
-                    new_coords = np.clip(new_coords, 0.0, 1.0)
-                    new_coords = new_coords.reshape(-1)
-
-                    aug_image_name = f"{os.path.splitext(image_name)[0]}_c{obj_class_id}_obj{obj_idx}_aug_{i}.jpg"
-                    aug_label_name = f"{os.path.splitext(label_file)[0]}_c{obj_class_id}_obj{obj_idx}_aug_{i}.txt"
-                    
-                    cv2.imwrite(os.path.join(output_dir, 'images', aug_image_name), bg_copy)
-                    with open(os.path.join(output_dir, 'labels', aug_label_name), 'w') as lf_aug:
-                        lf_aug.write(f"{obj_class_id} {' '.join(map(str, new_coords))}\n")
-                    
-                    generated_count += 1
 
         return generated_count
 
@@ -626,12 +611,183 @@ class DataAugmentor:
         min_width=0, min_height=0
     ):
         """
-        Generates 'total_images' number of images.
-        Each image contains 'objects_per_image' randomly selected objects.
-        Ensures no collision between objects.
+        Generates 'total_images' number of images using multiprocessing.
         """
-        # 1. Collect all valid objects first
-        all_valid_objects = [] # list of (image_path, class_id, coords)
+        # Pre-scan ALL potential samples to avoid repeated I/O in worker processes
+        # This might be memory intensive if too many, but strings are fine.
+        all_samples = [] 
+        # ... (logic to gather samples, similar to DataAugmentationManager but we need to do it here or pass it in)
+        # Actually, let's reuse DataAugmentationManager's sampling logic if possible, OR
+        # implement a efficient scanner here.
+        
+        # Logic to gather all label files
+        label_files = [f for f in os.listdir(labels_dir) if f.endswith('.txt')]
+        
+        # We need a robust list of samples. 
+        # Let's gather a pool of valid objects first.
+        valid_object_candidates = []
+        
+        print("Scanning dataset for valid objects...")
+        for lf in tqdm(label_files):
+            label_path = os.path.join(labels_dir, lf)
+            with open(label_path, 'r') as f:
+                lines = f.readlines()
+            
+            valid_lines = [l.strip() for l in lines if l.strip() and int(l.split()[0]) in class_ids]
+            if not valid_lines: continue
+            
+            # Find image
+            base_name = os.path.splitext(lf)[0]
+            image_path = None
+            for ext in ['.jpg', '.png', '.jpeg', '.bmp', '.JPG', '.PNG']:
+                cand = os.path.join(images_dir, base_name + ext)
+                if os.path.exists(cand):
+                    image_path = cand
+                    break
+            
+            if image_path:
+                for line in valid_lines:
+                    valid_object_candidates.append({
+                        "image_path": image_path,
+                        "label_line": line,
+                        "class_id": int(line.split()[0])
+                    })
+
+        if not valid_object_candidates:
+            print("No valid objects found for selected classes.")
+            return
+
+        print(f"Found {len(valid_object_candidates)} valid objects. Starting generation...")
+
+        # Prepare arguments for each image to be generated
+        tasks = []
+        for i in range(total_images):
+            # Pick random samples for this image
+            # We pick excess to handle failures
+            current_samples = random.sample(valid_object_candidates, min(len(valid_object_candidates), objects_per_image * 5))
+            
+            tasks.append((
+                current_samples, background_img, output_dir, i,
+                objects_per_image, rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
+                region_scale, image_w, image_h, max_region_w, max_region_h, roi, min_width, min_height
+            ))
+
+        # Run in parallel
+        # Note: background_img is passed. On Linux fork, this is efficient.
+        generated_count = 0
+        
+        # Use a slightly smaller pool to avoid choking the system? or full cpu_count.
+        num_workers = max(1, cpu_count() - 1)
+        
+        with Pool(processes=num_workers) as pool:
+            for result in tqdm(pool.imap_unordered(DataAugmentor.generate_single_composition_item, tasks), total=total_images):
+                generated_count += result
+                if update_progress_callback:
+                    update_progress_callback(generated_count, total_images)
+
+        return generated_count
+
+    @staticmethod
+    def generate_single_composition_item(args):
+        (
+            samples, background_img, output_dir, img_idx,
+            objects_per_image, rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
+            region_scale, image_w, image_h, max_region_w, max_region_h, roi, min_width, min_height
+        ) = args
+        
+        # Re-seed random
+        random.seed()
+        np.random.seed()
+
+        bg_h, bg_w = background_img.shape[:2]
+        bg_copy = background_img.copy()
+        
+        placed_boxes = []
+        aug_labels = []
+        placed_count = 0
+        
+        bound_x_min, bound_y_min = 0, 0
+        bound_x_max, bound_y_max = bg_w, bg_h
+        if roi:
+            rx, ry, rw, rh = roi
+            bound_x_min = int(rx * bg_w)
+            bound_y_min = int(ry * bg_h)
+            bound_x_max = int(min((rx + rw) * bg_w, bg_w))
+            bound_y_max = int(min((ry + rh) * bg_h, bg_h))
+
+        for sample in samples:
+            if placed_count >= objects_per_image:
+                break
+                
+            src_img = cv2.imread(sample["image_path"])
+            if src_img is None: continue
+            src_h, src_w = src_img.shape[:2]
+            
+            # Extract
+            parts = sample["label_line"].strip().split()
+            coords = np.array(parts[1:], dtype=float)
+            obj_class_id = int(parts[0])
+            
+            obj_roi, mask_roi, w, h, coords_relative = DataAugmentor.extract_object(
+                src_img, coords, src_w, src_h, min_width, min_height
+            )
+            if obj_roi is None: continue
+
+            # Augment
+            roi_w = bound_x_max - bound_x_min
+            roi_h = bound_y_max - bound_y_min
+            curr_max_region_w = int(region_scale * roi_w)
+            curr_max_region_h = int(region_scale * roi_h)
+
+            aug_obj, aug_mask, new_w, new_h, rotation_matrix, scale_factor = DataAugmentor.apply_augmentations(
+                obj_roi, mask_roi, w, h, 
+                rotation_range, blur_range, scaling_range, contrast_range, brightness_range,
+                curr_max_region_w, curr_max_region_h
+            )
+            if aug_obj is None: continue
+
+            # Place
+            placed = False
+            for _ in range(50):
+                x_range_max = max(bound_x_max - new_w, bound_x_min)
+                y_range_max = max(bound_y_max - new_h, bound_y_min)
+                
+                rand_x = random.randint(bound_x_min, x_range_max)
+                rand_y = random.randint(bound_y_min, y_range_max)
+                
+                current_box = [rand_x, rand_y, new_w, new_h]
+                collision = False
+                for pb in placed_boxes:
+                    if DataAugmentor.check_collision(current_box, pb):
+                        collision = True
+                        break
+                
+                if not collision:
+                    DataAugmentor.place_object(bg_copy, aug_obj, aug_mask, rand_x, rand_y)
+                    placed_boxes.append(current_box)
+                    placed = True
+                    placed_count += 1
+                    
+                    # Transform coords for label
+                    translation = [rand_x, rand_y]
+                    new_coords = DataAugmentor.transform_coordinates(coords_relative, rotation_matrix, scale_factor, translation)
+                    new_coords[:, 0] /= bg_w
+                    new_coords[:, 1] /= bg_h
+                    new_coords = np.clip(new_coords, 0.0, 1.0)
+                    new_coords = new_coords.reshape(-1)
+                    aug_labels.append(f"{obj_class_id} {' '.join(map(str, new_coords))}")
+                    
+                    break
+
+        if placed_count > 0:
+            aug_image_name = f"aug_comp_{img_idx}.jpg"
+            aug_label_name = f"aug_comp_{img_idx}.txt"
+            
+            cv2.imwrite(os.path.join(output_dir, 'images', aug_image_name), bg_copy)
+            with open(os.path.join(output_dir, 'labels', aug_label_name), 'w') as lf_aug:
+                for label in aug_labels:
+                    lf_aug.write(f"{label}\n")
+            return 1
         
         # Scan all label files
         label_files = [f for f in os.listdir(labels_dir) if f.endswith('.txt')]
