@@ -89,6 +89,7 @@ class AutoLabelRequest(BaseModel):
     dataset_path: str
     model_path: str
     confidence: float = 0.5
+    iou: float = 0.45
     save_masked: bool = False
 
 class AutoLabelSingleRequest(BaseModel):
@@ -96,6 +97,7 @@ class AutoLabelSingleRequest(BaseModel):
     image_name: str
     model_path: str
     confidence: float = 0.5
+    iou: float = 0.45
     save_masked: bool = True
 
 class FilterRequest(BaseModel):
@@ -1195,6 +1197,7 @@ def run_autolabel_task(request: AutoLabelRequest):
             model_path=request.model_path,
             image_dir=str(img_dir),
             confidence=request.confidence,
+            iou=request.iou,
             save_masked_images=request.save_masked,
             single_folder=True,
             class_names_map=class_names_map,
@@ -1318,6 +1321,7 @@ def autolabel_single_image(request: AutoLabelSingleRequest):
             model_path=request.model_path,
             image_dir=str(img_dir),
             confidence=request.confidence,
+            iou=request.iou,
             save_masked_images=request.save_masked,
             single_folder=True
         )

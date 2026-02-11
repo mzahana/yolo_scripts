@@ -42,6 +42,7 @@ function App() {
 
     const [modelPath, setModelPath] = useState('');
     const [confidence, setConfidence] = useState(0.5);
+    const [iou, setIou] = useState(0.45);
 
     const [isTaskRunning, setIsTaskRunning] = useState(false);
     const [taskProgress, setTaskProgress] = useState(null);
@@ -1017,6 +1018,7 @@ function App() {
                 dataset_path: targetPath,
                 model_path: modelPath,
                 confidence: parseFloat(confidence),
+                iou: parseFloat(iou),
                 save_masked: true
             });
             showNotification('Auto-labeling started...');
@@ -1388,6 +1390,7 @@ function App() {
                 image_name: img.name,
                 model_path: modelPath,
                 confidence: parseFloat(confidence),
+                iou: parseFloat(iou),
                 save_masked: true
             });
             setSingleLabelResult(res.data);
@@ -2008,6 +2011,19 @@ function App() {
                                         type="range" min="0.1" max="1.0" step="0.05"
                                         value={confidence}
                                         onChange={e => setConfidence(e.target.value)}
+                                        style={{ width: '100%', marginTop: '10px' }}
+                                    />
+                                </div>
+
+                                <div className="input-group">
+                                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                        <label>IoU Threshold</label>
+                                        <span style={{ color: 'var(--primary)', fontWeight: 'bold' }}>{iou}</span>
+                                    </div>
+                                    <input
+                                        type="range" min="0.1" max="1.0" step="0.05"
+                                        value={iou}
+                                        onChange={e => setIou(e.target.value)}
                                         style={{ width: '100%', marginTop: '10px' }}
                                     />
                                 </div>

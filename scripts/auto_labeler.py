@@ -45,10 +45,11 @@ import cv2
 import numpy as np
 
 class YOLOInference:
-    def __init__(self, model_path, image_dir, confidence=0.5, save_masked_images=False, epsilon=0.01, resize_height=None, resize_width=None, single_folder=False, class_names_map=None, output_labels_dir=None, output_masked_dir=None, save_labeled_images=True):
+    def __init__(self, model_path, image_dir, confidence=0.5, iou=0.45, save_masked_images=False, epsilon=0.01, resize_height=None, resize_width=None, single_folder=False, class_names_map=None, output_labels_dir=None, output_masked_dir=None, save_labeled_images=True):
         self.model_path_ = model_path
         self.image_dir_ = Path(image_dir)
         self.confidence_ = confidence
+        self.iou_ = iou
         self.save_masked_images_ = save_masked_images
         self.epsilon_ = epsilon
         self.resize_height_ = resize_height
@@ -248,6 +249,7 @@ class YOLOInference:
                     verbose=False,
                     stream=False,
                     conf=self.confidence_,
+                    iou=self.iou_,
                     device=self.device_
                 )
             except Exception as e:
